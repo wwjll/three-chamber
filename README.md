@@ -1,16 +1,17 @@
-# three-practical-cases
+# three-chamber
 
-# What is this lib?
+# What is this repo?
 
-A lib contains practical use cases using three.js and relative.
+A repo contains funny and useful cases using three.js.
 
 # How to run
 
-I hate build up a node project even for simple experiment, so all the examples will be designed as a stand-alone case and simply using live-server to run.
+All the examples use vanilla javascript.
+Mostly for my own experiments.
 
 run:
 
-- `git clone https://github.com/wwjll/three-practical-cases.git`
+- `git clone https://github.com/wwjll/three-chamber.git`
 - `npm i`
 - `install `live-server` plugin to start`
 
@@ -33,7 +34,12 @@ You can read the details in my blog : [juejin](https://juejin.cn/user/4663401068
 
   ![CameraEditor](./assets/docs/CameraEditor.gif)
 
+- **BimAnimation**
+  A simple case of animation control.
+  ![BimAnimation](./assets/docs/BimAnimation.gif)
+
 # Examples
 
-- [Dissolve](https://wwjll.github.io/three-practical-cases/examples-io/DissolveEffect.html)
-- [CameraEditor](https://wwjll.github.io/three-practical-cases/examples-io/CameraEditor.html)
+- [Dissolve](https://wwjll.github.io/three-chamber/examples-io/DissolveEffect.html)
+- [CameraEditor](https://wwjll.github.io/three-chamber/examples-io/CameraEditor.html)
+- [BimAnimation](https://wwjll.github.io/three-chamber/examples-io/BimAnimation.html)
