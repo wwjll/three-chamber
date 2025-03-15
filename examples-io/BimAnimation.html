@@ -127,7 +127,7 @@
             stats = new Stats();
             document.body.appendChild(stats.dom);
 
-            new GLTFLoader().load('https://wwjll.github.io/three-chamber/assets/models/projeto_estrutural_-_edificio_patio.glb',
+            new GLTFLoader().load('https://wwjll.github.io/three-chamber/assets/models/floors.glb',
 
                 function (gltf) {
                     let model = gltf.scene;
@@ -136,6 +136,7 @@
                     // mark each floor's status
                     floors.map(floor => {
                         const number = floor.userData.name.split(".")[1];
+                        console.log(number)
                         floorNumbers.push(Number(number));
                         floor.userData.originY = floor.position.y;
                         floor.userData.status = "normal";
@@ -152,6 +153,7 @@
                         gui.add(params, 'easingName', easingNames);
                         gui.add(params, 'easingType', ['In', 'InOut', 'Out']);
 
+                        console.log(floorNumbers)
                         gui.add({
                             level: floorNumbers[0]
                         }, 'level', floorNumbers[0], floorNumbers[floorNumbers.length - 1])

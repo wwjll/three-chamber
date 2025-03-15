@@ -1,0 +1,46 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@tweenjs/tween.js':
+        specifier: 21.1.1
+        version: 21.1.1
+      gl-noise:
+        specifier: ^1.6.1
+        version: 1.6.1
+      glsl-noise:
+        specifier: ^0.0.0
+        version: 0.0.0
+      three:
+        specifier: ^0.160.0
+        version: 0.160.1
+
+packages:
+
+  '@tweenjs/tween.js@21.1.1':
+    resolution: {integrity: sha512-O2GetAwEC/0MOiRb3lxCLIt/eeugoDPX0nu+1SFWLqGKf835ZdWsfM9RzDpjF+aKkpYMhvOnEhO+SxMnHHjpfw==}
+
+  gl-noise@1.6.1:
+    resolution: {integrity: sha512-2rkGehq5bqHCONQ4b8ssvQmbu8VVhzkHa+hR229xz3rdMIzZ1TmR87Gzgrf6bQex3Su8ZLAotp/97JW0hZi1bA==}
+
+  glsl-noise@0.0.0:
+    resolution: {integrity: sha512-b/ZCF6amfAUb7dJM/MxRs7AetQEahYzJ8PtgfrmEdtw6uyGOr+ZSGtgjFm6mfsBkxJ4d2W7kg+Nlqzqvn3Bc0w==}
+
+  three@0.160.1:
+    resolution: {integrity: sha512-Bgl2wPJypDOZ1stAxwfWAcJ0WQf7QzlptsxkjYiURPz+n5k4RBDLsq+6f9Y75TYxn6aHLcWz+JNmwTOXWrQTBQ==}
+
+snapshots:
+
+  '@tweenjs/tween.js@21.1.1': {}
+
+  gl-noise@1.6.1: {}
+
+  glsl-noise@0.0.0: {}
+
+  three@0.160.1: {}

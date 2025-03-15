@@ -103,7 +103,7 @@
             // preview camera
             showHelper: true,
             aspect: windwoWidth / windowHeight,
-            near: 10,
+            near: 1,
             far: 50,
             fov: 20,
             // edit options
@@ -157,8 +157,6 @@
             transformControl = new TransformControls(camera, renderer.domElement);
             scene.add(transformControl);
 
-            // stats = new Stats();
-            // document.body.appendChild(stats.dom);
 
             clock = new THREE.Clock();
 
@@ -167,7 +165,6 @@
                 // new GLTFLoader().load('http://localhost:2000/Architecture/San_Miguel/san-miguel.glb',
                 function (gltf) {
                     let model = gltf.scene;
-                    model.frustumCulled = false;
                     scene.add(model);
 
                     const box = new THREE.Box3();
