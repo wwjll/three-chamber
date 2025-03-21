@@ -2,16 +2,16 @@
   "name": "three-chamber",
   "version": "1.0.0",
   "description": "A lib contains practical use cases using three.js and relative.",
-  "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build-examples": "cd examples && parcel build ./*.html --dist-dir ./bundle/ --public-url . --no-cache --no-content-hash",
+    "build-single-examples": "cd examples && parcel build ./xxx.html --dist-dir ./bundle/ --public-url . --no-cache --no-content-hash --no-optimize ",
+    "start": "cd examples &&parcel serve ./*.html --dist-dir ./dev-bundle/ --no-cache"
   },
-  "author": "",
+  "author": "wwjll",
   "license": "ISC",
   "dependencies": {
     "@tweenjs/tween.js": "21.1.1",
-    "gl-noise": "^1.6.1",
-    "glsl-noise": "^0.0.0",
+    "parcel": "^2.14.0",
     "three": "^0.160.0"
   }
 }
