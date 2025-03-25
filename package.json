@@ -13,5 +13,8 @@
     "@tweenjs/tween.js": "21.1.1",
     "parcel": "^2.14.0",
     "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "buffer": "^5.5.0||^6.0.0"
   }
 }

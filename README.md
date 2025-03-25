@@ -1,11 +1,10 @@
 # three-chamber
 
-A repo contains funny and useful cases using three.js.
+A repository of creative and practical experiments using Three.js
 
 # How to run
 
-All examples use vanilla javascript.
-Mostly for my own experiments.
+All examples use vanilla JavaScript and are primarily for experimental purposes.
 
 1. Install Depencencies
 
@@ -13,7 +12,7 @@ Mostly for my own experiments.
 pnpm i
 ```
 
-2. Start a local server to provide textures or 3D models.
+2. Launch Asset Server
 
 ```shell
 cd assets
@@ -26,37 +25,31 @@ http-server -p 2000 --cors
 pnpm run start
 ```
 
-Install live-server plugin in VSCode or use your own server then you are good to go.
+# My Blog
 
-You can also preview the projects online.
+Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
-# Blog
+# Featured Projects
 
-You can read the details in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
+- **Dissolve Effect**
 
-# Introduction
-
-- **Dissolve**
-
-  A simple case to extend three.js shader using `onBeforeCompile` api, you can experience 2 different shaders.
+  Custom shader extension using Three.js onBeforeCompile API
 
   [Preview](https://wwjll.github.io/three-chamber/examples/bundle/dissolveEffect.html)
-
 
   ![Dissolve](./assets/docs/DissolveEffect.gif)
 
 - **CameraEditor**
 
-  A small case to edit splines for camera, including progress control, generator animation, scissor and viewport, using RAF(requestAnimationFrame) only in camera animation as needed, featuring tween.js easing functions in animation progress and more.
-  It is available in low-end laptops running scene complicated like San-Miguel.
+  Spline-based camera animation toolkit
 
   [Preview](https://wwjll.github.io/three-chamber/examples/bundle/cameraEditor.html)
 
   ![CameraEditor](./assets/docs/CameraEditor.gif)
 
-- **BimAnimation**
+- **Bim Animation**
 
-  A simple case of animation control.
+  Lightweight building animation controller
 
   [Preview](https://wwjll.github.io/three-chamber/examples/bundle/buildingAnimation.html)
 
@@ -64,8 +57,18 @@ You can read the details in my blog : [juejin](https://juejin.cn/user/4663401068
 
 - **DistortHighMap**
 
-  A simple case using bump texture and shader to create visual effect.
+  Visual effects using bump textures and custom shaders
 
   [Preview](https://wwjll.github.io/three-chamber/examples/bundle/distortHighMap.html)
 
   ![DistortHighMap](./assets/docs/DistortHighMap.gif)
+
+
+- **PathTracing**
+
+  Simple Path-Tracing demo on top of Three.js.
+  unfortunately due to my lack of experience, you may need to set Chrome browser ANGLE backend to OpenGL to be compatible.
+
+  [Preview](https://wwjll.github.io/three-chamber/examples/bundle/pathTracing.html)
+
+  ![DistortHighMap](./assets/docs/PathTracing.png)
