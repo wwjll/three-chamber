@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { CopyMaterial } from './materials/CopyMaterial'
 import { OutputMaterial } from './materials/OutputMaterial'
 import { PathTracingMaterial } from './materials/PathTracingMaterial'
@@ -20,10 +19,7 @@ function* renderTask() {
         pathTracingRenderTarget,
         copyRenderTarget,
         copyScene,
-        outputScene,
-        pathTracingQuad,
-        copyQuad,
-        outputQuad
+        outputScene
     } = this;
 
     const pathTracingMaterial = this.pathTracingQuad.material;

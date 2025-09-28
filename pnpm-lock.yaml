@@ -11,6 +11,9 @@ importers:
       '@tweenjs/tween.js':
         specifier: 21.1.1
         version: 21.1.1
+      gl-matrix:
+        specifier: ^3.4.3
+        version: 3.4.3
       parcel:
         specifier: ^2.14.0
         version: 2.14.0(@swc/helpers@0.5.15)
@@ -643,6 +646,9 @@ packages:
   get-port@4.2.0:
     resolution: {integrity: sha512-/b3jarXkH8KJoOMQc3uVGHASwGLPq3gSFJ7tgJm2diza+bydJPTGOibin2steecKeOylE8oY2JERlVWkAJO6yw==}
     engines: {node: '>=6'}
+
+  gl-matrix@3.4.3:
+    resolution: {integrity: sha512-wcCp8vu8FT22BnvKVPjXa/ICBWRq/zjFfdofZy1WSpQZpphblv12/bOQLBC1rMM7SGOFS9ltVmKOHil5+Ml7gA==}
 
   globals@13.24.0:
     resolution: {integrity: sha512-AhO5QUcj8llrbG09iWhPU2B204J1xnPeL8kQmVorSsy+Sjj1sk8gIyh6cUocGmH4L0UuhAJy+hJMRA4mgA4mFQ==}
@@ -1823,6 +1829,8 @@ snapshots:
       to-regex-range: 5.0.1
 
   get-port@4.2.0: {}
+
+  gl-matrix@3.4.3: {}
 
   globals@13.24.0:
     dependencies:
