@@ -73,11 +73,11 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
 -   **DH Links**
 
-    Denavit-Hartenberg robotic arm modeling demo.
-    Shows DH links clearly, with connections rendered as 3d Bezier curves.
-    In MDH mode, I add an extra parameter set so there is an end joint for consistency.
-    I started using Codex for this example.
+    Denavit-Hartenberg robotic arm modeling demo.  
+    Shows DH links clearly, with connections rendered as 3d Bezier curves.  
+    In MDH mode, I add an extra parameter set so there is an end joint for consistency.  
+    I started using Codex for this example.  
 
     [Preview](https://wwjll.github.io/three-chamber/examples/bundle/dhLinks.html)
 
-    ![DH Links](./assets/docs/dhLinks.png)
+    ![DH Links](./assets/docs/DHLinks.png)
