@@ -32,15 +32,15 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
 -   **Dissolve Effect**
 
-    Custom shader extension using Three.js onBeforeCompile API
+    Custom dissolve shader driven by Three.js onBeforeCompile for art-directed fades
 
     [Preview](https://wwjll.github.io/three-chamber/examples/bundle/dissolveEffect.html)
 
     ![Dissolve](./assets/docs/DissolveEffect.gif)
 
--   **CameraEditor**
+-   **Camera Editor**
 
-    Spline-based camera animation toolkit
+    Spline-based camera animation editor for smooth, programmable shots
 
     [Preview](https://wwjll.github.io/three-chamber/examples/bundle/cameraEditor.html)
 
@@ -48,25 +48,36 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
 -   **Bim Animation**
 
-    Lightweight building animation controller
+    Lightweight BIM building animation controller with timeline-friendly motion
 
     [Preview](https://wwjll.github.io/three-chamber/examples/bundle/buildingAnimation.html)
 
     ![BimAnimation](./assets/docs/BimAnimation.gif)
 
--   **DistortHighMap**
+-   **Distorted Highmap**
 
-    Visual effects using bump textures and custom shaders
+    Heightmap-driven distortion effect using custom shader passes
 
     [Preview](https://wwjll.github.io/three-chamber/examples/bundle/distortHighMap.html)
 
     ![DistortHighMap](./assets/docs/DistortHighMap.gif)
 
--   **PathTracing**
+-   **Path-Tracing**
 
-    Simple Path-Tracing demo on top of Three.js.
-    Unfortunately due to my lack of experience, you may need to set Chrome browser ANGLE backend to OpenGL to be compatible.
+    Simple path-tracing demo built on Three.js.
+    You may need to set Chrome's ANGLE backend to OpenGL for compatibility.
 
     [Preview](https://wwjll.github.io/three-chamber/examples/bundle/pathTracing.html)
 
-    ![DistortHighMap](./assets/docs/PathTracing.png)
+    ![PathTracing](./assets/docs/PathTracing.png)
+
+-   **DH Links**
+
+    Denavit-Hartenberg robotic arm modeling demo.
+    Shows DH links clearly, with connections rendered as 3d Bezier curves.
+    In MDH mode, I add an extra parameter set so there is an end joint for consistency.
+     I started using Codex for this example.
+
+    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/dhLinks.html)
+
+    ![DH Links](./assets/docs/dhLinks.png)

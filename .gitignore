@@ -134,3 +134,30 @@ dist
 
 # bundles
 examples/dev-bundle
+
+# ==============================================================================
+# LLM & AI AGENT CONFIGURATIONS
+# ==============================================================================
+
+# Ignore agent.md in the root and all subdirectories
+agent.md
+**/agent.md
+
+# Claude & Anthropic specific files
+.claude/
+**/claude/
+.anthropic/
+
+# General LLM logs, cache, and generated outputs
+**/llm_logs/
+**/llm_cache/
+**/llm_output/
+
+# AI Agent temporary workspaces and process files
+**/agent_workspace/
+**/agent_temp/
+
+# CRITICAL: Prevent API Keys and secrets from being committed
+.env
+.env.local
+.env.*.local
