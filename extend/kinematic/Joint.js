@@ -1,9 +1,16 @@
 import {
     AxesHelper,
     Matrix4,
+    Quaternion,
+    Vector3,
 } from 'three';
 import { Frame } from './Frame.js';
 import { DOFHelper } from './Helper.js';
+
+const DEFAULT_JOINT_AXIS = new Vector3(0, 0, 1);
+const _worldQuat = new Quaternion();
+const _localQuat = new Quaternion();
+const _localRot = new Matrix4();
 
 export class Joint extends Frame {
 
@@ -22,6 +29,11 @@ export class Joint extends Frame {
         this.mdh = null;
         this.mode = 'DH';
 
+    }
+
+    setLimit(minAngle, maxAngle) {
+        if (Number.isFinite(minAngle)) this.minAngle = minAngle;
+        if (Number.isFinite(maxAngle)) this.maxAngle = maxAngle;
     }
 
     // Rz(theta) * Tz(d) * Tx(a) * Rx(alpha), Standard DH: Joint applies only the revolute rotation about its local Z.
@@ -140,6 +152,27 @@ export class Joint extends Frame {
             this.add(child);
         }
 
+    }
+
+    getWorldPosition(out = new Vector3()) {
+        this.updateWorldMatrix(true, false);
+        return super.getWorldPosition(out);
+    }
+
+    getLocalPosition(out = new Vector3()) {
+        const e = this.matrix.elements;
+        return out.set(e[12] || 0, e[13] || 0, e[14] || 0);
+    }
+
+    getWorldAxis(out = new Vector3()) {
+        this.updateWorldMatrix(true, false);
+        this.getWorldQuaternion(_worldQuat);
+        return out.copy(DEFAULT_JOINT_AXIS).applyQuaternion(_worldQuat).normalize();
+    }
+
+    // Local axis is always the joint's +Z in its own space.
+    getLocalAxis(out = new Vector3()) {
+        return out.copy(DEFAULT_JOINT_AXIS);
     }
 
 

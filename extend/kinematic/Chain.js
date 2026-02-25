@@ -3,6 +3,9 @@ import { Joint } from './Joint.js';
 import { Link } from './Link.js';
 import { AlignBaseMatrix, ConvertMDH } from './Utils.js';
 
+const _tmpParentQuat = new THREE.Quaternion();
+const _tmpWorldQuat = new THREE.Quaternion();
+
 function createSoftRandomColor() {
     const color = new THREE.Color();
     const hue = Math.random();
@@ -125,6 +128,7 @@ export class Chain {
         this.scene = scene;
         this.robotContainer = null;
         this.roboticArm = null;
+        this.joints = [];
         this.randomJointColors = [];
         this.randomJointColorEnabled = false;
     }
@@ -213,6 +217,7 @@ export class Chain {
             }
         }
 
+        this.joints = [];
         let jointIndex = 0;
         root.traverse((node) => {
             if (mode === 'MDH' && node.isLink) {
@@ -276,6 +281,7 @@ export class Chain {
                     }
                 }
             } else if (node.isJoint) {
+                this.joints.push(node);
                 if (typeof styleParams.showAxisHelper === 'boolean') {
                     const axisOptions = {};
                     if (styleParams.axisHelperSize !== undefined) {
@@ -331,6 +337,102 @@ export class Chain {
         this.generate(dhParameters, styleParams, baseParams);
     }
 
+    getEndEffectorNode() {
+        if (!this.robotContainer) return null;
+        this.robotContainer.updateMatrixWorld(true);
+
+        let root = null;
+        this.robotContainer.traverse((node) => {
+            if (node && node.isRoot) root = node;
+        });
+        if (!root) {
+            this.robotContainer.traverse((node) => {
+                if (!root && node && (node.isJoint || node.isLink)) root = node;
+            });
+        }
+        if (!root) return null;
+
+        let current = root;
+        while (true) {
+            const next = current.children.find((child) => child && (child.isJoint || child.isLink));
+            if (!next) break;
+            current = next;
+        }
+
+        current.updateWorldMatrix(true, false);
+        return current;
+    }
+
+    getEndEffectorWorldPosition(out = new THREE.Vector3()) {
+        const node = this.getEndEffectorNode();
+        if (!node) return null;
+        return node.getWorldPosition(out);
+    }
+
+    getEndEffectorWorldQuaternion(out = new THREE.Quaternion()) {
+        const node = this.getEndEffectorNode();
+        if (!node) return null;
+        return node.getWorldQuaternion(out);
+    }
+
+    getEndEffectorLocalPosition(out = new THREE.Vector3()) {
+        if (!this.robotContainer) return null;
+        const worldPos = this.getEndEffectorWorldPosition(out);
+        if (!worldPos) return null;
+        return this.robotContainer.worldToLocal(worldPos);
+    }
+
+    getEndEffectorLocalQuaternion(out = new THREE.Quaternion()) {
+        if (!this.robotContainer) return null;
+        const worldQuat = this.getEndEffectorWorldQuaternion(_tmpWorldQuat);
+        if (!worldQuat) return null;
+        this.robotContainer.updateMatrixWorld(true);
+        this.robotContainer.getWorldQuaternion(_tmpParentQuat);
+        return out.copy(_tmpParentQuat).invert().multiply(worldQuat).normalize();
+    }
+
+    updateJoint(q = []) {
+        if (!this.robotContainer) return;
+        const joints = Array.isArray(this.joints) && this.joints.length > 0
+            ? this.joints
+            : [];
+
+        if (joints.length === 0) {
+            this.robotContainer.traverse((node) => {
+                if (node && node.isJoint) joints.push(node);
+            });
+            this.joints = joints;
+        }
+
+        for (let i = 0; i < joints.length; i++) {
+            const joint = joints[i];
+            if (!joint) continue;
+            const thetaBase = Number.isFinite(q[i]) ? q[i] : 0;
+            const dh = joint.dh || {};
+            const thetaOffset = Number.isFinite(dh.thetaOffset) ? dh.thetaOffset : 0;
+            const theta = thetaBase + thetaOffset;
+
+            if (joint.mode === 'MDH' || joint.mdh) {
+                const d = Number.isFinite(joint.mdh?.d)
+                    ? joint.mdh.d
+                    : (Number.isFinite(dh.d) ? dh.d : 0);
+                const m = new THREE.Matrix4().makeRotationZ(theta);
+                m.setPosition(0, 0, d);
+                joint.matrix.copy(m);
+                if (joint.mdh) joint.mdh.theta = theta;
+                if (joint.dh) joint.dh.theta = theta;
+                joint.mode = 'MDH';
+            } else {
+                const m = new THREE.Matrix4().makeRotationZ(theta);
+                joint.matrix.copy(m);
+                if (joint.dh) joint.dh.theta = theta;
+                joint.mode = 'DH';
+            }
+        }
+
+        this.robotContainer.updateMatrixWorld(true);
+    }
+
     syncAxis(styleParams = {}, baseOffset = {}) {
         if (this.robotContainer) {
             if (styleParams.syncUp) {
@@ -347,8 +449,4 @@ export class Chain {
             }
         }
     }
-}
-
-class ChainSolver {
-
 }

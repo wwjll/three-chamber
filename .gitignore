@@ -141,7 +141,9 @@ examples/dev-bundle
 
 # Ignore agent.md in the root and all subdirectories
 agent.md
+Agent.md
 **/agent.md
+**/Agent.md
 
 # Claude & Anthropic specific files
 .claude/

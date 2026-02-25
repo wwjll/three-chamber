@@ -157,8 +157,8 @@ const presets = {
             { theta: 0, d: 0.4, a: 0.18, alpha: 90, minAngle: -185, maxAngle: 185 },
             { theta: 90, d: 0, a: 0.6, alpha: 0, minAngle: -155, maxAngle: 35 },
             { theta: 0, d: 0, a: 0.12, alpha: 90, minAngle: -130, maxAngle: 154 },
-            { theta: 0, d: 0.62, a: 0, alpha: 90, minAngle: -350, maxAngle: 350 },
-            { theta: 0, d: 0, a: 0, alpha: 90, minAngle: -130, maxAngle: 130 },
+            { theta: 0, d: 0.62, a: 0, alpha: -90, minAngle: -350, maxAngle: 350 },
+            { theta: 180, d: 0, a: 0, alpha: 90, minAngle: -130, maxAngle: 130 },
             { theta: 0, d: 0.115, a: 0, alpha: 0, minAngle: -350, maxAngle: 350 }
         ]
     },
