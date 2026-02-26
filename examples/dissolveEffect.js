@@ -7,7 +7,7 @@ import { TextureLoader } from 'three/src/loaders/TextureLoader.js';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 
-import { getAssetURL } from '/extend/tools/index.js'
+import { getAssetURL } from '/extend/tools/Tool.js'
 
 const assetUrl = getAssetURL();
 const noiseTexture = assetUrl + "textures/noise.png"

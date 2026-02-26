@@ -1,4 +1,6 @@
 
+import RenderLoopController from './RenderLoopController.js';
+
 function getAssetURL() {
     let assetUrl;
 
@@ -12,7 +14,13 @@ function getAssetURL() {
     return assetUrl;
 }
 
+const renderLoopController = new RenderLoopController();
+
+function getRenderLoopController() {
+    return renderLoopController;
+}
 
 export {
-    getAssetURL
+    getAssetURL,
+    getRenderLoopController
 }

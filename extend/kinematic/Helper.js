@@ -12,7 +12,7 @@ import {
     RingGeometry,
 } from 'three';
 
-import { HALF_PI } from './Constants.js';
+import { HALF_PI } from '../tools/Constants.js';
 import { clampMinSize, normalizeSpanDeg } from './Utils.js';
 
 const AXIS_NAMES = {

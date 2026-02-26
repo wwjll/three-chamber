@@ -36,8 +36,10 @@ export class Joint extends Frame {
         if (Number.isFinite(maxAngle)) this.maxAngle = maxAngle;
     }
 
-    // Rz(theta) * Tz(d) * Tx(a) * Rx(alpha), Standard DH: Joint applies only the revolute rotation about its local Z.
     applyJointDH(theta, d, a, alpha) {
+        // Standard DH decomposition:
+        // full transform is Rz(theta) * Tz(d) * Tx(a) * Rx(alpha),
+        // while this joint node applies only Rz(theta) about local Z.
 
         const m = new Matrix4().makeRotationZ(theta);
         this.matrix.copy(m);
@@ -46,8 +48,10 @@ export class Joint extends Frame {
         this.mode = 'DH';
     }
 
-    // Rx(alpha) * Tx(a) * Rz(theta) * Tz(d), Modified DH: Rz(theta) * Tz(d) applys to Joint in MDH
     applyJointMDH(theta, d) {
+        // Modified DH decomposition:
+        // full transform is Rx(alpha) * Tx(a) * Rz(theta) * Tz(d),
+        // while this joint node applies Rz(theta) and Tz(d).
         const m = new Matrix4().makeRotationZ(theta);
         m.setPosition(0, 0, Number.isFinite(d) ? d : 0);
         this.matrix.copy(m);
@@ -170,8 +174,8 @@ export class Joint extends Frame {
         return out.copy(DEFAULT_JOINT_AXIS).applyQuaternion(_worldQuat).normalize();
     }
 
-    // Local axis is always the joint's +Z in its own space.
     getLocalAxis(out = new Vector3()) {
+        // Local axis is always the joint's +Z in its own space.
         return out.copy(DEFAULT_JOINT_AXIS);
     }
 

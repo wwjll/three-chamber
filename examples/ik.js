@@ -56,6 +56,7 @@ const solverParams = {
     alpha: 0.05,
     tolerance: targetTolerance,
     solveMode: 'Position + Rotation',
+    solveImmediately: false,
     target: 'Position',
     debug: true
 };
@@ -110,13 +111,12 @@ function init() {
         controls.enabled = !event.value;
         isDraggingTarget = event.value === true;
         if (!isDraggingTarget) {
-            // Keep converging toward the last target after drag ends.
-            solveActive = true;
-            pendingSolve = true;
+            // Default behavior: solve once after drag end (mouse up).
+            queueSolveFromTarget();
         }
     });
     endEffector.controls.addEventListener('change', () => {
-        if (isDraggingTarget) {
+        if (isDraggingTarget && solverParams.solveImmediately) {
             queueSolveFromTarget();
         }
     });
@@ -151,6 +151,9 @@ function init() {
         .onChange((value) => {
             if (chainSolver) chainSolver.debug = value === true;
         });
+    controlsFolder
+        .add(solverParams, 'solveImmediately')
+        .name('Solve Immediately');
     targetModeController = controlsFolder
         .add(solverParams, 'target', ['Position', 'Rotate'])
         .name('Target')

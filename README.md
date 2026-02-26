@@ -4,25 +4,12 @@ A repository of creative and practical experiments using Three.js
 
 # How to run
 
-All examples use vanilla JavaScript and are primarily for experimental purposes.
-
-1. Install Depencencies
-
-```shell
-pnpm i
-```
-
-2. Launch Asset Server
-
-```shell
-cd assets && http-server -p 2000 --cors
-```
-
-3. Start dev server
-
 ```shell
 pnpm run start
 ```
+
+Static asset server runs on port `2000` by default.
+If assets fail to load, check whether the asset server is running and whether port `2000` is reachable.
 
 # My Blog
 
@@ -46,13 +33,13 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
     ![CameraEditor](./assets/docs/CameraEditor.gif)
 
--   **Bim Animation**
+-   **TowerMotion**
 
     Lightweight BIM building animation controller with timeline-friendly motion
 
-    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/buildingAnimation.html)
+    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/towerMotion.html)
 
-    ![BimAnimation](./assets/docs/BimAnimation.gif)
+    ![TowerMotion](./assets/docs/TowerMotion.gif)
 
 -   **Distorted Highmap**
 

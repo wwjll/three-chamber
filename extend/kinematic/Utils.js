@@ -1,25 +1,8 @@
 import { Matrix4 } from "three";
 
-/*
-* 
-* Align
-Three.js World:
-      Y ↑
-        |
-        |
-        o─── X →
-       /
-      Z (toward viewer)
-* with
-Robot World:
-    Z ↑
-    |
-    |
-    o─── Y →
-    /
-    X (toward viewer)
-*/
 export function AlignBaseMatrix(container, offset = {}) {
+    // Align robot frame (Z-up) to Three.js frame (Y-up) via Rx(-90deg),
+    // then apply base translation offset in the aligned frame.
     // Rotate robot Z-up frame to three.js Y-up: R = Rx(-90deg)
     const A = new Matrix4().set(
         1, 0, 0, 0,

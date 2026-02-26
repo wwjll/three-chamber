@@ -5,7 +5,9 @@
   "scripts": {
     "build-examples": "cd examples && parcel build ./*.html --dist-dir ./bundle/ --public-url . --no-cache --no-content-hash",
     "build-single-examples": "cd examples && parcel build ./xxx.html --dist-dir ./bundle/ --public-url . --no-cache --no-content-hash --no-optimize ",
-    "start": "cd examples &&parcel serve ./*.html --dist-dir ./dev-bundle/ --no-cache"
+    "start": "sh -c '(cd assets && http-server -p 2000 --cors) & (cd examples && parcel serve ./*.html --dist-dir ./dev-bundle/ --no-cache)'",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "author": "wwjll",
   "license": "ISC",
@@ -16,6 +18,10 @@
     "three": "^0.160.0"
   },
   "devDependencies": {
-    "buffer": "^5.5.0||^6.0.0"
+    "@eslint/js": "^9.21.0",
+    "buffer": "^5.5.0||^6.0.0",
+    "eslint": "^9.21.0",
+    "globals": "^15.15.0",
+    "http-server": "^14.1.1"
   }
 }

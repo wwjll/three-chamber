@@ -1,7 +1,7 @@
 import { Object3D } from "three";
 
 import { mat4, quat, vec3 } from 'gl-matrix';
-import { RAD2DEG } from './Constants.js';
+import { RAD2DEG } from '../tools/Constants.js';
 
 
 export class Frame extends Object3D {

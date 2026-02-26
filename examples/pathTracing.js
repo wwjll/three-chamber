@@ -7,7 +7,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { SceneGenerator } from "../extend/path-tracing/SceneGenerator";
 import { PathTracer } from "../extend/path-tracing/PathTracer";
 
-import { getAssetURL } from '/extend/tools/index.js'
+import { getAssetURL } from '/extend/tools/Tool.js'
 
 const assetUrl = getAssetURL();
 // const modelUrl = assetUrl + "models/bunny.glb";

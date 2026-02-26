@@ -145,10 +145,15 @@ Agent.md
 **/agent.md
 **/Agent.md
 
+# OpenAI
+.codex
+.Codex
+**/codex/
+**/Codex/
+
 # Claude & Anthropic specific files
 .claude/
 **/claude/
-.anthropic/
 
 # General LLM logs, cache, and generated outputs
 **/llm_logs/

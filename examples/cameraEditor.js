@@ -4,7 +4,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
-import { getAssetURL } from '/extend/tools/index.js'
+import { getAssetURL } from '/extend/tools/Tool.js'
 
 const assetUrl = getAssetURL();
 const modelUrl = assetUrl + "models/collision-world.glb"
