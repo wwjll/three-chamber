@@ -97,9 +97,6 @@ function init() {
             motionController.bindFloors(floors);
             floorNumbers = motionController.getOperableLevels();
 
-            window.model = model;
-            window.floors = floors;
-
             initGUI();
 
             scene.add(model);

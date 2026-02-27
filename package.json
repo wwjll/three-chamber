@@ -15,7 +15,8 @@
     "@tweenjs/tween.js": "21.1.1",
     "gl-matrix": "^3.4.3",
     "parcel": "^2.14.0",
-    "three": "^0.160.0"
+    "three": "^0.160.0",
+    "tweakpane": "^4.0.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",

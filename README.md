@@ -17,13 +17,13 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
 # Featured Projects
 
--   **Dissolve Effect**
+-   **Dissolve**
 
     Custom dissolve shader driven by Three.js onBeforeCompile for art-directed fades
 
-    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/dissolveEffect.html)
+    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/dissolve.html)
 
-    ![Dissolve](./assets/docs/DissolveEffect.gif)
+    ![Dissolve](./assets/docs/Dissolve.gif)
 
 -   **Camera Editor**
 
@@ -41,13 +41,13 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
     ![TowerMotion](./assets/docs/TowerMotion.gif)
 
--   **Distorted Highmap**
+-   **HeightWarp**
 
     Heightmap-driven distortion effect using custom shader passes
 
-    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/distortHighMap.html)
+    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/heightWarp.html)
 
-    ![DistortHighMap](./assets/docs/DistortHighMap.gif)
+    ![HeightWarp](./assets/docs/HeightWarp.gif)
 
 -   **Path-Tracing**
 

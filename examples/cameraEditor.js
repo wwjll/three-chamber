@@ -3,82 +3,63 @@ import * as TWEEN from '@tweenjs/tween.js/dist/tween.esm.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
-import { getAssetURL } from '/extend/tools/Tool.js'
+import { Pane } from 'tweakpane';
+import { getAssetURL } from '/extend/tools/Tool.js';
+import { TrackEditor } from '/extend/editor/TrackEditor.js';
 
 const assetUrl = getAssetURL();
-const modelUrl = assetUrl + "models/collision-world.glb"
-
-let camera, scene, renderer, controls, raycaster, transformControl;
-
-let previewCamera;
-let previewCameraHelper;
-
-/* defines */
-const BG_COLOR = 0x333333;
-
-/* global variables */
-
-// for collision world
-let points = [
-    new THREE.Vector3(13.656463381771713, 14.283809732883363, -7.668193169056049),
-    new THREE.Vector3(0.9998577232602041, 5.256311262739087, 3.9526593933678797),
-    new THREE.Vector3(5.003802510959054, -0.6844364277972178, 11.729153299298071),
-    new THREE.Vector3(-2.0803289556393207, -0.36919658334801253, 10.97966816333047)
+const modelUrl = assetUrl + 'models/collision-world.glb';
+const points = [
+    new THREE.Vector3(13.66, 14.28, -7.66),
+    new THREE.Vector3(0.99, 5.25, 3.95),
+    new THREE.Vector3(5, -0.68, 11.72),
+    new THREE.Vector3(-2.08, -0.36, 10.97)
 ];
 
-let splinePoints = [];
-let clipSplinePoints = [];
-let splines = {};
-let arcSegments = 200;
-let tension = 0.5;
-let pointer = new THREE.Vector2();
-let windwoWidth = window.innerWidth;
+const BG_COLOR = 0x333333;
+
+let camera, scene, renderer, controls;
+let trackEditor;
+
+let windowWidth = window.innerWidth;
 let windowHeight = window.innerHeight;
-let animationId;
-let animationTask;
-let isAnimating = false;
 const dimension = {
+    // for scene camera position
     center: new THREE.Vector3(),
     min: new THREE.Vector3(),
     max: new THREE.Vector3()
 };
-const controlGroup = new THREE.Group();
-const cubeScale = .5;
-const controlGeometry = new THREE.BoxGeometry(cubeScale, cubeScale, cubeScale);
-const controlMaterial = new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff });
 
 let progressController;
-const folders = {};
+let syncingProgressFromAnimation = false;
+let exportTextarea = null;
 const params = {
-    // spline options 
+    // spline options
     showCurve: true,
-    tension: tension,
-    arcSegments: arcSegments,
+    tension: 0.5,
+    arcSegments: 100,
     curveType: 'uniform',
     // preview camera
-    showHelper: true,
-    aspect: windwoWidth / windowHeight,
+    show: true,
+    aspect: windowWidth / windowHeight,
     near: 1,
     far: 50,
     fov: 20,
     // edit options
-    addPoint: addPoint,
-    removePoint: removePoint,
-    exportSpline: exportSpline,
+    addPoint: () => { },
+    removePoint: () => { },
     // animation options
     easing: 'Linear',
     easingType: 'In',
     stride: 0.001,
-    play: play,
+    play: () => { },
     pause: false,
-    reset: reset,
+    reset: () => { },
     progress: 0,
     // preview viewport
-    scale: 0.33,
+    scale: 0.2,
     top: 0,
-    left: 0,
-    clearColor: 0x666666
+    left: 0
 };
 
 init();
@@ -87,35 +68,219 @@ function init() {
 
     renderer = new THREE.WebGLRenderer({ antialias: false });
     renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(windwoWidth, windowHeight);
+    renderer.setSize(windowWidth, windowHeight);
     renderer.setClearColor(BG_COLOR, 1);
     document.body.appendChild(renderer.domElement);
 
     scene = new THREE.Scene();
     scene.add(new THREE.AmbientLight(0xf0f0f0, 3));
 
-    scene.add(controlGroup);
+    camera = new THREE.PerspectiveCamera(70, windowWidth / windowHeight, 1, 1000);
 
-    camera = new THREE.PerspectiveCamera(70, windwoWidth / windowHeight, 1, 1000);
-
-    const { aspect, near, far, fov, showHelper } = params;
-    previewCamera = new THREE.PerspectiveCamera(fov, aspect, near, far);
-    previewCameraHelper = new THREE.CameraHelper(previewCamera);
-    previewCameraHelper.visible = showHelper;
+    const { aspect, near, far, fov, show } = params;
     scene.add(camera);
-    scene.add(previewCamera);
-    scene.add(previewCameraHelper);
+
+    trackEditor = new TrackEditor({
+        renderer,
+        scene,
+        sceneCamera: camera,
+        cameraRef: new THREE.PerspectiveCamera(fov, aspect, near, far),
+        cameraState: { aspect, near, far, fov, showHelper: show },
+        dimension
+    });
+    scene.add(trackEditor.camera);
+    trackEditor.setCameraHelper(new THREE.CameraHelper(trackEditor.camera));
+    scene.add(trackEditor.cameraHelper);
+
+    const getPreviewCameraState = () => ({
+        aspect: params.aspect,
+        fov: params.fov,
+        near: params.near,
+        far: params.far,
+        showHelper: params.show
+    });
+
+    const syncViewPort = () => {
+        trackEditor.setViewPortFromPixels({
+            left: params.left,
+            top: params.top,
+            scale: params.scale,
+            width: windowWidth,
+            height: windowHeight
+        });
+    };
+
+    const syncClip = () => {
+        trackEditor.clipProgress({
+            arcSegments: params.arcSegments,
+            curveType: params.curveType,
+            progress: trackEditor.animationState.progress
+        });
+    };
+
+    const syncSplineMesh = () => {
+        trackEditor.updateSplineMesh(params.arcSegments);
+    };
+
+    const syncPreviewCamera = (state = 0, index = 0) => {
+        trackEditor.setPreviewCamera(state, index, getPreviewCameraState(), params.arcSegments);
+    };
+
+    const refreshProgressController = () => {
+        if (progressController) {
+            progressController.refresh();
+        }
+    };
+
+    const setAnimationProgress = (nextProgress, syncUi = true) => {
+        trackEditor.setAnimation({ progress: nextProgress });
+        params.progress = trackEditor.animationState.progress;
+        if (syncUi) {
+            refreshProgressController();
+        }
+    };
+
+    const refreshSplineState = ({
+        clip = true,
+        mesh = true,
+        exportText = true,
+        render = true
+    } = {}) => {
+        if (clip) {
+            syncClip();
+        }
+        if (mesh) {
+            syncSplineMesh();
+        }
+        if (exportText) {
+            refreshExportTextarea();
+        }
+        if (render) {
+            renderScene();
+        }
+    };
+
+    const renderScene = () => {
+        syncViewPort();
+        trackEditor.render({
+            renderer,
+            scene,
+            sceneCamera: camera,
+            mainClearColor: BG_COLOR
+        });
+    };
+
+    const round4 = (n) => Number(n.toFixed(4));
+
+    const buildCurveExportText = () => {
+        const source = (trackEditor.controlGroup?.children?.length || 0) > 0
+            ? trackEditor.controlGroup.children
+            : trackEditor.points;
+        const pointTuples = [];
+        for (let i = 0; i < source.length; i++) {
+            const p = source[i].position || source[i];
+            pointTuples.push([round4(p.x), round4(p.y), round4(p.z)]);
+        }
+        return JSON.stringify({
+            curveType: params.curveType,
+            tension: round4(params.tension),
+            arcSegments: params.arcSegments,
+            points: pointTuples
+        }, null, 2);
+    };
+
+    const refreshExportTextarea = () => {
+        if (!exportTextarea) {
+            return;
+        }
+        exportTextarea.value = buildCurveExportText();
+    };
+
+    const resetAnimation = (resetCamera = true) => {
+        setAnimationProgress(0, true);
+
+        trackEditor.stopAnimationLoop();
+        trackEditor.reset(false);
+
+        if (resetCamera) {
+            syncPreviewCamera(0, 0);
+        }
+
+        renderScene();
+    };
+
+    params.addPoint = () => {
+        const point = trackEditor.addRandomPoint();
+        if (!point) {
+            return;
+        }
+        refreshSplineState();
+    };
+
+    params.removePoint = () => {
+        const removed = trackEditor.removePoint(3);
+        if (!removed) {
+            alert('Cannot remove when control points are less than 3.');
+            return;
+        }
+        syncPreviewCamera(2, trackEditor.points.length - 2);
+        refreshSplineState();
+    };
+
+    params.play = () => {
+        const progress = trackEditor.animationState.progress;
+        if (!Number.isFinite(progress) || progress >= 1 || progress < 0) {
+            setAnimationProgress(0, true);
+        } else {
+            setAnimationProgress(progress, true);
+        }
+        params.pause = false;
+        syncClip();
+
+        trackEditor.setAnimation({
+            easing: params.easing,
+            easingType: params.easingType,
+            stride: params.stride,
+            progress: trackEditor.animationState.progress,
+            pause: false
+        });
+        // Ensure a fresh RAF loop and callback set for every play click.
+        trackEditor.stopAnimationLoop();
+        trackEditor.play();
+        trackEditor.startAnimationLoop({
+            shouldPause: () => params.pause,
+            step: () => trackEditor.stepAnimationOnSpline(params.arcSegments),
+            onFrame: (value) => {
+                syncingProgressFromAnimation = true;
+                params.progress = value.progress;
+                refreshProgressController();
+                syncingProgressFromAnimation = false;
+                renderScene();
+            },
+            onComplete: () => {
+                trackEditor.setAnimation({ progress: 1, pause: true });
+                trackEditor.pause();
+                params.pause = true;
+                params.progress = 1;
+                refreshProgressController();
+                renderScene();
+            }
+        });
+    };
+
+    params.reset = () => resetAnimation(true);
+    syncViewPort();
 
 
     controls = new OrbitControls(camera, renderer.domElement);
 
-    raycaster = new THREE.Raycaster();
-    transformControl = new TransformControls(camera, renderer.domElement);
-    scene.add(transformControl);
+    trackEditor.setRaycaster(new THREE.Raycaster());
+    trackEditor.setTransformControl(new TransformControls(camera, renderer.domElement));
+    scene.add(trackEditor.transformControl);
 
     new GLTFLoader().load(modelUrl,
         function (gltf) {
-            let model = gltf.scene;
+            const model = gltf.scene;
             scene.add(model);
 
             const box = new THREE.Box3();
@@ -148,666 +313,154 @@ function init() {
             light.shadow.mapSize.height = 1024;
             scene.add(light);
 
-            /* generate control objects */
-            {
-                // randomly generate points
-                if (points.length == 0) {
-
-                    points.length = 0;
-                    const { center, min, max, size } = dimension;
-                    for (let i = 0; i < 3; ++i) {
-
-                        const point = new THREE.Vector3(
-                            Math.random() * size.x + min.x,
-                            Math.random() * size.y + center.y,
-                            Math.random() * size.z + min.z
-                        );
-                        points.push(point);
-
-                    }
-                }
-
-
-                // make sure cubes being added first
-                for (let point of points) {
-
-                    addControlMesh(point);
-
-                }
-
-                // reset preview camera
-                setPreviewCamera();
-
-                // set positions reference so that points don't need to manually overwrite
-                const meshes = controlGroup.children;
-                const length = meshes.length;
-
-                points.length = 0;
-
-                for (let i = 0; i < length; ++i) {
-
-                    points[i] = meshes[i].position;
-
-                }
-
-                // then adding curves
-                const geometry = new THREE.BufferGeometry();
-                geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(arcSegments * 3), 3));
-
-                let curve = new THREE.CatmullRomCurve3(points);
-                curve.curveType = 'catmullrom';
-                curve.mesh = new THREE.Line(geometry.clone(), new THREE.LineBasicMaterial({
-                    color: 0xff0000,
-                    opacity: 0.35
-                }));
-                curve.mesh.castShadow = true;
-                splines.uniform = curve;
-
-                curve = new THREE.CatmullRomCurve3(points);
-                curve.curveType = 'centripetal';
-                curve.mesh = new THREE.Line(geometry.clone(), new THREE.LineBasicMaterial({
-                    color: 0x00ff00,
-                    opacity: 0.35
-                }));
-                curve.mesh.castShadow = true;
-                splines.centripetal = curve;
-
-                curve = new THREE.CatmullRomCurve3(points);
-                curve.curveType = 'chordal';
-                curve.mesh = new THREE.Line(geometry.clone(), new THREE.LineBasicMaterial({
-                    color: 0x0000ff,
-                    opacity: 0.35
-                }));
-                curve.mesh.castShadow = true;
-                splines.chordal = curve;
-
-                for (const k in splines) {
-                    const spline = splines[k];
-
-                    scene.add(spline.mesh);
-                }
-
-                clipSplinePoints = clipProgress();
-                // use splines to update positions of curve meshes
-                updateSplineMesh();
-                render();
-
-            }
-        },
-        function (xhr) {
-            // console.log( (xhr.loaded / xhr.total * 100) + '% loaded');
-        },
-        function (error) {
-            console.log(error);
-        });
-
-    /* handle gui*/
-    {
-        const gui = new GUI();
-
-        const splineFolder = gui.addFolder('Spline');
-        splineFolder.add(params, 'showCurve').onChange(v => {
-
-            for (const k in splines) {
-                const spline = splines[k];
-                spline.mesh.visible = v;
-            }
-            render();
-
-        });
-        splineFolder.add(params, 'curveType', ['centripetal', 'uniform', 'chordal']).onChange(render);
-        splineFolder.add(params, 'tension', 0, 1).step(0.01).onChange(value => {
-
-            for (const k in splines) {
-                const spline = splines[k];
-                spline.tension = value;
-            }
-            updateSplineMesh();
-            render();
-
-        });
-        splineFolder.add(params, 'arcSegments', 100, 5000).step(100).onChange(value => {
-
-            for (const k in splines) {
-                const spline = splines[k];
-                spline.arcLengthDivisions = value;
-            }
-
-            updateSplineMesh();
-            render();
-            arcSegments = value;
-
-        });
-        folders.splineFolder = splineFolder;
-
-        const helperFolder = gui.addFolder('Camera Helper');
-        helperFolder.add(params, 'showHelper').onChange(v => {
-            controlGroup.traverse(cube => {
-                cube.visible = v;
+            trackEditor.generateControlObjects({
+                points,
+                arcSegments: params.arcSegments
             });
-            setPreviewCamera();
-            render();
-        });;
-        helperFolder.add(params, 'aspect', 1, 10).step(0.1).onChange(v => {
-            setPreviewCamera();
-            render();
-        });
-        helperFolder.add(params, 'fov', 0, 180).step(1).onChange(v => {
-            setPreviewCamera();
-            render();
-        });
-        helperFolder.add(params, 'near', 1, 200).step(1).onChange(v => {
-            setPreviewCamera();
-            render();
-        });
-        helperFolder.add(params, 'far', 500, 2000).step(1).onChange(v => {
-            setPreviewCamera();
-            render();
-        });
-        folders.helperFolder = helperFolder;
-
-
-        const editFolder = gui.addFolder('Edit');
-        editFolder.add(params, 'addPoint');
-        editFolder.add(params, 'removePoint');
-        editFolder.add(params, 'exportSpline');
-        folders.editFolder = editFolder;
-
-        const animationFolder = gui.addFolder('Animation');
-        const easings = [];
-        for (let e in TWEEN.Easing) {
-            easings.push(e);
-        }
-        animationFolder.add(params, 'easing', easings);
-        animationFolder.add(params, 'easingType', ['In', 'InOut', 'Out']);
-        animationFolder.add(params, 'stride', 0.001, 0.1).step(0.0001);
-        animationFolder.add(params, 'play');
-        animationFolder.add(params, 'pause');
-        animationFolder.add(params, 'reset');
-        // clip animation
-        animationFolder.add(params, 'progress', 0, 1).step(0.01).onChange(v => {
-
-            clipSplinePoints = clipProgress();
-            setPreviewCamera(3);
-            render();
-
+            syncPreviewCamera(0, 0);
+            refreshExportTextarea();
+            renderScene();
         });
 
-        folders.animationFolder = animationFolder;
+    const pane = new Pane({ title: 'Track Editor' });
 
-        const viewportFolder = gui.addFolder('Viewport');
-        viewportFolder.add(params, 'scale', 0.1, 0.5).step(0.01).onChange(v => {
-            render();
-        });
-        viewportFolder.add(params, 'top', 0, windowHeight).step(10).onChange(v => {
-            render();
-        });
-        viewportFolder.add(params, 'left', 0, windwoWidth).step(10).onChange(v => {
-            render();
-        });
-        viewportFolder.addColor(params, 'clearColor').onChange(v => {
-            render();
-        });
-        folders.viewportFolder = viewportFolder;
+    const splineFolder = pane.addFolder({ title: 'Spline' });
+    splineFolder.addBinding(params, 'showCurve').on('change', (ev) => {
+        trackEditor.setSplinesVisible(ev.value);
+        renderScene();
+    });
+    splineFolder.addBinding(params, 'curveType', {
+        options: { centripetal: 'centripetal', uniform: 'uniform', chordal: 'chordal' }
+    }).on('change', () => {
+        refreshSplineState({ mesh: false });
+    });
+    splineFolder.addBinding(params, 'tension', { min: 0, max: 1, step: 0.01 }).on('change', (ev) => {
+        trackEditor.setSplineTension(ev.value);
+        refreshSplineState({ clip: false });
+    });
+    splineFolder.addBinding(params, 'arcSegments', { min: 10, max: 200, step: 10 }).on('change', (ev) => {
+        trackEditor.setSplineArcDivisions(ev.value);
+        trackEditor.setSpline({ arcSegments: ev.value });
+        refreshSplineState();
+    });
 
-        progressController = folders.animationFolder.children[6];
-        gui.open();
+    const helperFolder = pane.addFolder({ title: 'Helper' });
+    const updatePreviewCamera = (partial) => {
+        trackEditor.setCamera(partial);
+        syncPreviewCamera(0, 0);
+        renderScene();
+    };
+    helperFolder.addBinding(params, 'show').on('change', (ev) => {
+        trackEditor.controlGroup.traverse((cube) => {
+            cube.visible = ev.value;
+        });
+        updatePreviewCamera({ showHelper: ev.value });
+    });
+    helperFolder.addBinding(params, 'aspect', { min: 1, max: 10, step: 0.1 }).on('change', (ev) => {
+        updatePreviewCamera({ aspect: ev.value });
+    });
+    helperFolder.addBinding(params, 'fov', { min: 0, max: 180, step: 1 }).on('change', (ev) => {
+        updatePreviewCamera({ fov: ev.value });
+    });
+    helperFolder.addBinding(params, 'near', { min: 1, max: 200, step: 1 }).on('change', (ev) => {
+        updatePreviewCamera({ near: ev.value });
+    });
+    helperFolder.addBinding(params, 'far', { min: 500, max: 2000, step: 1 }).on('change', (ev) => {
+        updatePreviewCamera({ far: ev.value });
+    });
+    helperFolder.addButton({ title: 'addPoint' }).on('click', () => params.addPoint());
+    helperFolder.addButton({ title: 'removePoint' }).on('click', () => params.removePoint());
 
+    const animationFolder = pane.addFolder({ title: 'Animation' });
+    const easingOptions = {};
+    for (const e in TWEEN.Easing) {
+        easingOptions[e] = e;
     }
-
-    /* handle events */
-    {
-        transformControl.addEventListener('dragging-changed', event => {
-
-            controls.enabled = !event.value;
-
-        });
-
-        transformControl.addEventListener('objectChange', event => {
-
-            clipSplinePoints = clipProgress();
-
-            updateSplineMesh();
-            if (!isAnimating) {
-
-                setPreviewCamera(3);
-
+    animationFolder.addBinding(params, 'easing', { options: easingOptions });
+    animationFolder.addBinding(params, 'easingType', {
+        options: { In: 'In', InOut: 'InOut', Out: 'Out' }
+    });
+    animationFolder.addBinding(params, 'stride', { min: 0.001, max: 0.1, step: 0.0001 });
+    animationFolder.addButton({ title: 'play' }).on('click', () => params.play());
+    animationFolder.addButton({ title: 'pause' }).on('click', () => {
+        params.pause = true;
+        trackEditor.pause();
+        trackEditor.stopAnimationLoop();
+    });
+    animationFolder.addButton({ title: 'reset' }).on('click', () => params.reset());
+    progressController = animationFolder
+        .addBinding(params, 'progress', { min: 0, max: 1, step: 0.001 })
+        .on('change', (ev) => {
+            if (syncingProgressFromAnimation || trackEditor.isAnimating) {
+                return;
             }
-
+            setAnimationProgress(ev.value, false);
+            refreshSplineState({ mesh: false, exportText: false, render: false });
+            syncPreviewCamera(3, 0);
+            renderScene();
         });
 
-        window.addEventListener('resize', () => {
+    const viewportFolder = pane.addFolder({ title: 'Viewport' });
+    const refreshViewPort = () => renderScene();
+    viewportFolder.addBinding(params, 'scale', { min: 0.1, max: 0.5, step: 0.01 }).on('change', refreshViewPort);
+    viewportFolder.addBinding(params, 'top', { min: 0, max: windowHeight, step: 10 }).on('change', refreshViewPort);
+    viewportFolder.addBinding(params, 'left', { min: 0, max: windowWidth, step: 10 }).on('change', refreshViewPort);
 
-            windwoWidth = window.innerWidth;
+    const exportFolder = pane.addFolder({ title: 'Export' });
+    exportFolder.addButton({ title: 'refreshData' }).on('click', () => refreshExportTextarea());
+
+    const exportContainer = document.createElement('div');
+    exportContainer.style.padding = '8px 4px 4px';
+    exportTextarea = document.createElement('textarea');
+    exportTextarea.readOnly = false;
+    exportTextarea.spellcheck = false;
+    exportTextarea.rows = 12;
+    exportTextarea.style.width = '100%';
+    exportTextarea.style.resize = 'vertical';
+    exportTextarea.style.background = 'var(--tp-button-background-color, var(--tp-base-background-color, #2f2f2f))';
+    exportTextarea.style.color = 'var(--tp-button-foreground-color, #e8e8e8)';
+    exportTextarea.style.border = '1px solid var(--tp-base-shadow-color, rgba(0,0,0,0.35))';
+    exportTextarea.style.borderRadius = '4px';
+    exportTextarea.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+    exportTextarea.style.fontSize = '11px';
+    exportTextarea.style.lineHeight = '1.4';
+    exportContainer.appendChild(exportTextarea);
+    const exportFolderElement = exportFolder.element || pane.element;
+    exportFolderElement.appendChild(exportContainer);
+    const syncExportVisibility = () => {
+        exportContainer.style.display = exportFolder.expanded ? '' : 'none';
+    };
+    syncExportVisibility();
+    exportFolder.on('fold', () => {
+        syncExportVisibility();
+    });
+    refreshExportTextarea();
+
+    trackEditor.mountInteractions({
+        windowTarget: window,
+        orbitControls: controls,
+        controlGroup: trackEditor.controlGroup,
+        interactionCamera: camera,
+        getSize: () => ({ width: windowWidth, height: windowHeight }),
+        onObjectChange: () => {
+            refreshSplineState({ render: false });
+            if (!trackEditor.isAnimating) {
+                syncPreviewCamera(3, 0);
+            }
+        },
+        onResize: () => {
+            windowWidth = window.innerWidth;
             windowHeight = window.innerHeight;
 
             renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.setSize(windwoWidth, windowHeight);
+            renderer.setSize(windowWidth, windowHeight);
 
-            const aspect = windwoWidth / windowHeight;
-
+            const aspect = windowWidth / windowHeight;
             camera.aspect = aspect;
-            previewCamera.aspect = aspect;
             camera.updateProjectionMatrix();
-            previewCamera.updateProjectionMatrix();
-            previewCameraHelper.update();
-
-            render();
-        });
-
-        // right click
-        window.addEventListener('contextmenu', event => {
-
-            raycaster.setFromCamera(pointer, camera);
-
-            const gizmo = transformControl.children[0];
-            const intersects = raycaster.intersectObjects([...controlGroup.children, gizmo], false);
-
-            if (intersects.length == 0) {
-
-                transformControl.detach();
-
-            }
-
-            render();
-
-        });
-
-        window.addEventListener('mousewheel', () => {
-
-            render();
-
-        });
-
-
-        window.addEventListener('mousemove', event => {
-
-            pointer.x = (event.clientX / windwoWidth) * 2 - 1;
-            pointer.y = - (event.clientY / windowHeight) * 2 + 1;
-            raycaster.setFromCamera(pointer, camera);
-
-            const intersects = raycaster.intersectObjects(controlGroup.children, false);
-            if (intersects.length > 0) {
-                const object = intersects[0].object;
-
-                if (transformControl.dragging) return;
-
-                if (object !== transformControl.object) {
-
-                    transformControl.attach(object);
-
-                }
-            }
-
-            render();
-        });
-
-    }
-}
-
-
-/* utils */
-
-// generate new point and add to points
-function addPoint() {
-
-    const { size, center, min, max } = dimension;
-    const randomPoint = new THREE.Vector3(
-        Math.random() * size.x + min.x,
-        Math.random() * size.y + center.y,
-        Math.random() * size.z + min.z
-    );
-
-    addControlMesh(randomPoint, (cube, nextPointIndex) => {
-        // set positions reference so that points don't need to manually overwrite
-        points.push(cube.position);
+            params.aspect = aspect;
+            trackEditor.setCamera({ aspect });
+        },
+        onRender: renderScene
     });
-
-    clipSplinePoints = clipProgress();
-
-    updateSplineMesh();
-
-    render();
-
-}
-
-// remove point from points
-function removePoint() {
-
-    if (points.length <= 3) {
-
-        alert("Can't not remove from points less than 3.");
-        return;
-
-    }
-
-    const cubes = controlGroup.children;
-
-    points.pop();
-    const cube = cubes.pop();
-
-    // a proper way to determine if is the same object
-    if (transformControl.object && cube.uuid === transformControl.object.uuid) {
-
-        transformControl.detach();
-
-    }
-    cube.dispose && cube.dispose();
-    // set helper to last - 1
-    setPreviewCamera(2, points.length - 2);
-
-    clipSplinePoints = clipProgress();
-
-    updateSplineMesh();
-
-    render();
-}
-
-// update splines meshes already exist
-function updateSplineMesh() {
-
-    const point = new THREE.Vector3();
-    const newSegments = params.arcSegments;
-    const updateBuffer = (arcSegments != newSegments);
-
-    for (const k in splines) {
-        const spline = splines[k];
-        const splineMesh = spline.mesh;
-        const geometry = splineMesh.geometry;
-        let position = geometry.attributes.position;
-
-        if (updateBuffer) {
-
-            geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(newSegments * 3), 3));
-            // a must do step: new buffer is replaced, change BufferAttribute reference
-            position = geometry.attributes.position;
-        }
-        for (let i = 0; i < newSegments; i++) {
-            const t = i / (newSegments - 1);
-            spline.getPoint(t, point);
-            position.setXYZ(i, point.x, point.y, point.z);
-
-        }
-
-        // update buffer in next frame
-        position.needsUpdate = true;
-    }
-
-}
-
-// add control cube by a new position
-function addControlMesh(point, callback) {
-
-    const nextPointIndex = points.length;
-
-    const cube = new THREE.Mesh(controlGeometry, controlMaterial);
-    cube.position.setX(point.x);
-    cube.position.setY(point.y);
-    cube.position.setZ(point.z);
-    cube.castShadow = true;
-    cube.receiveShadow = true;
-    controlGroup.add(cube);
-
-    callback && callback(cube, nextPointIndex);
-}
-
-
-function exportSpline() {
-    const strplace = [];
-    const objects = controlGroup.children;
-    const length = objects.length;
-    for (let i = 0; i < length; i++) {
-        const p = objects[i].position;
-        strplace.push(`new THREE.Vector3(${p.x}, ${p.y}, ${p.z})`);
-    }
-    console.log(strplace.join(',\n'));
-    const code = '[' + (strplace.join(',\n\t')) + ']';
-    prompt('copy and paste code', code);
-
-}
-
-// viewports
-function getViewports() {
-    const { clearColor, scale, top, left } = params;
-    // left and top is relative to the leftTop corner while webgl is from leftBottom
-    return [
-
-        {
-            name: "main",
-            camera: camera,
-            width: windwoWidth,
-            // height: windowHeight * (1 - scale),
-            height: windowHeight,
-            left: 0,
-            top: 0,
-            clearColor: BG_COLOR
-        },
-
-        {
-            name: "preview",
-            camera: previewCamera,
-            width: scale * windwoWidth,
-            height: scale * windowHeight,
-            left: left,
-            top: windowHeight * (1 - scale) - top,
-            clearColor: clearColor
-        },
-    ];
-}
-
-
-function* animation() {
-
-    let { arcSegments, curveType, stride, easing, easingType, progress } = params;
-
-    // let dt = 0;
-
-    let easingFun = TWEEN.Easing[easing];
-    if (easing == 'generatePow') {
-        easingFun = easingFun();
-    }
-
-    while (progress <= 1) {
-
-        const length = splinePoints.length;
-
-        let easingProgress = easingFun[easingType](progress);
-
-        let startIndex = easingProgress * arcSegments & 0x7FFFFFFF;
-        // boundary, animation will stop before last point
-        if (startIndex >= length - 1) {
-            startIndex = length - 2;
-        }
-
-        let targetIndex = startIndex + 1;
-
-        const startPoint = splinePoints[startIndex];
-        const targetPoint = splinePoints[targetIndex];
-
-        previewCamera.position.copy(startPoint);
-        previewCamera.lookAt(targetPoint);
-        previewCamera.updateProjectionMatrix();
-        previewCameraHelper.update();
-
-        progress += stride;
-
-        yield progress;
-    }
-
-}
-
-// play animation
-function play() {
-    // maybe make "play", "pause", "resume" in one button will be better
-    // const playController = folders.animationFolder.children[3];
-
-    if (!animationTask) {
-
-        animationTask = animation();
-
-    }
-
-    if (!isAnimating) {
-
-        startAnimation();
-
-    }
-
-    isAnimating = true;
-
-    function startAnimation() {
-
-        animationId = requestAnimationFrame(startAnimation);
-
-        if (params.pause) return;
-        let value = animationTask && animationTask.next();
-        // animation end reset to the origin
-        if (value) {
-
-            if (value.done) {
-
-                reset(0);
-
-                // reset progress to 1 because we use easing function to clip splines 
-                // the progress will never reach 1 (the bigger arcSegments is more closer to 1)
-                params.progress = 1;
-                progressController.updateDisplay();
-
-            }
-            else {
-
-                const progress = value.value;
-                // reset gui
-                params.progress = progress;
-                progressController.updateDisplay();
-
-            }
-
-            render();
-
-        }
-    }
-}
-
-// terminate animation
-function reset(resetCamera = true) {
-
-    params.progress = 0;
-    progressController.updateDisplay();
-
-    if (animationId) cancelAnimationFrame(animationId);
-    animationTask = null;
-    isAnimating = false;
-
-    if (resetCamera) setPreviewCamera();
-
-    render();
-
-}
-
-// render webgl
-function render() {
-
-    const views = getViewports();
-    for (let view of views) {
-
-        const { clearColor, left, top, width, height, camera } = view;
-
-        renderer.setClearColor(clearColor, 1);
-        renderer.setScissor(left, top, width, height);
-        renderer.setViewport(left, top, width, height);
-        renderer.setScissorTest(true);
-        renderer.render(scene, camera);
-    }
-
-}
-
-/**
-* state: 0 means reset, 1 means use index to update, 2 means use points to update, 3 means progress 
-* index: current index in spline
-*/
-function setPreviewCamera(state = 0, index = 0) {
-
-    let positionIndex = index;
-    let targetIndex = index + 1;
-
-    switch (state) {
-        case 0:
-            // use in init and transform objectChange
-            setMatrix(0, 1, points);
-            break;
-        case 1:
-
-            if (index == arcSegments) {
-
-                positionIndex -= 1;
-                targetIndex -= 1;
-
-            }
-
-            setMatrix(positionIndex, targetIndex, clipSplinePoints);
-            break;
-
-        case 2:
-            // use in removePoint
-            const pointsNum = points.length;
-
-            if (index == pointsNum) {
-
-                positionIndex -= 1;
-                targetIndex -= 1;
-
-            }
-
-            setMatrix(positionIndex, targetIndex, points);
-            break;
-        case 3:
-            if (clipSplinePoints.length < 2) return;
-            // progress change
-            setMatrix(0, 1, clipSplinePoints);
-            break;
-
-    }
-
-    const { showHelper, fov, near, far, aspect } = params;
-    previewCamera.aspect = aspect;
-    previewCamera.fov = fov;
-    previewCamera.near = near;
-    previewCamera.far = far;
-    previewCamera.updateProjectionMatrix();
-    previewCameraHelper.visible = showHelper;
-    previewCameraHelper.update();
-
-    function setMatrix(index, index2, array) {
-
-        previewCamera.position.copy(array[index]);
-        previewCamera.lookAt(array[index2]);
-        previewCamera.updateProjectionMatrix();
-        previewCameraHelper.update();
-
-    }
-
-
-}
-
-// clip spline points by clipProgress 
-function clipProgress() {
-
-    const { arcSegments, curveType, progress } = params;
-
-    splinePoints = splines[curveType].getPoints(arcSegments);
-    if (progress === 0) {
-
-        return splinePoints;
-
-    }
-
-    // maximum progress is less than 1 to prevent clipping empty spline
-    const _progress = progress === 1 ? 0.99 : progress;
-    let spline = splines[curveType].getPoints(arcSegments, _progress, 1);
-
-    const clipOffset = progress * arcSegments & 0x0FFFFFFF;
-    spline = spline.splice(clipOffset, arcSegments - 1);
-
-    return spline;
 }

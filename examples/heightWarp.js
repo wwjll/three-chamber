@@ -5,9 +5,10 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 
-import { getAssetURL } from '/extend/tools/Tool.js'
+import { getAssetURL, getRenderLoopController } from '/extend/tools/Tool.js'
 
 const assetUrl = getAssetURL();
+const renderLoop = getRenderLoopController();
 
 let options = {
     radius: 100,
@@ -18,18 +19,16 @@ let options = {
 };
 
 const BG_COLOR = 0x111111;
-const FRAME_INTERVAL = 1 / 30;
-let dt = 0;
+const FRAME_RATE = 30;
 
 let renderer;
 let camera, controller;
 let scene;
 let loader;
 let geometry, material, mesh;
-let clock, stats, gui;
+let stats, gui;
 
 init();
-render();
 
 function initThree() {
     let width = window.innerWidth;
@@ -48,17 +47,27 @@ function initThree() {
     camera.up.set(0, 1, 0);
     controller = new OrbitControls(camera, renderer.domElement);
     controller.target = new THREE.Vector3(0, 0, 0);
+    controller.update();
+    controller.addEventListener('change', () => {
+        renderLoop.requestRender();
+    });
 
     loader = new THREE.TextureLoader();
 
     gui = new GUI();
     gui.add(options, 'factor', 0, 50).onChange(e => {
         material.uniforms.u_factor.value = e;
+        renderLoop.requestRender();
     });
 
-    clock = new THREE.Clock();
     stats = new Stats();
     document.body.appendChild(stats.dom);
+
+    renderLoop.configure({
+        fps: FRAME_RATE,
+        render: renderFrame
+    });
+    renderLoop.setRenderOnIdle(false);
 
     window.addEventListener('resize', e => {
 
@@ -68,6 +77,7 @@ function initThree() {
         camera.updateProjectionMatrix();
 
         renderer.setSize(windwoWidth, windowHeight);
+        renderLoop.requestRender();
     });
 }
 
@@ -134,23 +144,13 @@ function initScene() {
     scene.add(mesh);
 }
 
-function render() {
-    requestAnimationFrame(render);
-
-    let time = clock.getDelta();
-    const delta = Math.min(time, FRAME_INTERVAL);
-    dt += time;
-
-    if (dt > FRAME_INTERVAL) {
-        controller.update();
-        stats.update();
-        renderer.render(scene, camera);
-    }
-
-    dt %= FRAME_INTERVAL;
+function renderFrame() {
+    stats.update();
+    renderer.render(scene, camera);
 }
 
 function init() {
     initThree();
     initScene();
+    renderLoop.requestRender();
 }

@@ -7,19 +7,20 @@ import { TextureLoader } from 'three/src/loaders/TextureLoader.js';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 
-import { getAssetURL } from '/extend/tools/Tool.js'
+import { getAssetURL, getRenderLoopController } from '/extend/tools/Tool.js'
 
 const assetUrl = getAssetURL();
+const renderLoop = getRenderLoopController();
 const noiseTexture = assetUrl + "textures/noise.png"
 const fireTexture = assetUrl + "textures/fire.jpg"
 const modelUrl = assetUrl + "models/soldier.glb"
 
 let camera, scene, renderer, controls, mixer;
-let clock, stats, gui;
+let stats, gui;
 
 /* defines */
 const BG_COLOR = 0x111111;
-const FRAME_INTERVAL = 1 / 30;
+const FRAME_RATE = 30;
 
 /* global variables */
 let windwoWidth = window.innerWidth;
@@ -29,11 +30,12 @@ const dimension = {
     min: new THREE.Vector3(),
     max: new THREE.Vector3()
 };
-let dt = 0;
 let shaders = [];
 let isDissolving = false;
+let hasMixerAnimation = false;
 let params = {
     times: 'repeat',
+    frameRate: FRAME_RATE,
     edgeColor: 0xfa9200,
     edgeWidth: 0.1,
     dissolveSpeed: 0.01,
@@ -46,7 +48,6 @@ let params = {
 let signedDissolveSpeed = params.dissolveSpeed;
 
 init();
-render();
 
 function init() {
     renderer = new THREE.WebGLRenderer({ antialias: false });
@@ -64,10 +65,17 @@ function init() {
     scene.add(camera);
 
     controls = new OrbitControls(camera, renderer.domElement);
+    controls.addEventListener('change', () => {
+        renderLoop.requestRender();
+    });
 
-    clock = new THREE.Clock();
     stats = new Stats();
     document.body.appendChild(stats.dom);
+    renderLoop.configure({
+        fps: params.frameRate,
+        render: renderFrame
+    });
+    renderLoop.setRenderOnIdle(false);
 
     new GLTFLoader().load(modelUrl,
 
@@ -102,11 +110,16 @@ function init() {
             /* GUI */
             {
                 gui = new GUI();
+                gui.add(params, 'frameRate', 5, 120).step(1).name('frameRate').onChange(v => {
+                    renderLoop.setFPS(v);
+                    renderLoop.requestRender();
+                });
                 gui.addColor(params, 'edgeColor').onChange(v => {
 
                     for (let shader of shaders) {
                         shader.uniforms.edgeColor = { value: new THREE.Color(v) };
                     }
+                    renderLoop.requestRender();
 
                 });
                 gui.add(params, 'edgeWidth', 0.01, 1).step(0.01).onChange(v => {
@@ -114,10 +127,13 @@ function init() {
                     for (let shader of shaders) {
                         shader.uniforms.edgeWidth = { value: v };
                     }
+                    renderLoop.requestRender();
 
                 });
 
-                gui.add(params, 'dissolveSpeed', 0.01, 0.1).step(0.01);
+                gui.add(params, 'dissolveSpeed', 0.01, 0.1).step(0.01).onChange(() => {
+                    renderLoop.requestRender();
+                });
                 gui.add(params, 'appear');
                 gui.add(params, 'disappear');
 
@@ -131,6 +147,8 @@ function init() {
                 const animationAction = mixer.clipAction(animations[3]);
                 animationAction.play();
                 animationAction.paused = false;
+                hasMixerAnimation = true;
+                updateContinuousState();
             }
 
             // shadowPlane
@@ -186,8 +204,10 @@ function init() {
                 camera.updateProjectionMatrix();
 
                 renderer.setSize(windwoWidth, windowHeight);
+                renderLoop.requestRender();
             });
 
+            renderLoop.requestRender();
 
         },
         function (xhr) {
@@ -198,36 +218,38 @@ function init() {
         });
 }
 
-function render() {
-    requestAnimationFrame(render);
+function renderFrame(deltaSec = 1 / FRAME_RATE) {
+    const delta = Math.min(deltaSec, 1 / params.frameRate);
 
-    let time = clock.getDelta();
-    const delta = Math.min(time, FRAME_INTERVAL);
+    stats.update();
+    if (mixer) {
+        mixer.update(delta);
+    }
 
-    dt += time;
-    if (dt > FRAME_INTERVAL) {
-
-        stats.update();
-        mixer && mixer.update(delta);
-
-        if (isDissolving) {
-
-            for (let shader of shaders) {
-                let { dissolveProgress, dissolveSpeed } = shader.uniforms;
-                dissolveProgress.value += dissolveSpeed.value;
-                if (dissolveProgress.value < 0) {
-                    isDissolving = false;
-                }
-                if (dissolveProgress.value > 1) {
-                    isDissolving = false;
-                }
+    if (isDissolving) {
+        let hasActiveDissolve = false;
+        for (let shader of shaders) {
+            let { dissolveProgress, dissolveSpeed } = shader.uniforms;
+            dissolveProgress.value += dissolveSpeed.value;
+            if (dissolveProgress.value >= 0 && dissolveProgress.value <= 1) {
+                hasActiveDissolve = true;
             }
-
         }
 
-        renderer.render(scene, camera);
+        if (!hasActiveDissolve) {
+            isDissolving = false;
+            updateContinuousState();
+        }
+    }
 
-        dt %= FRAME_INTERVAL;
+    renderer.render(scene, camera);
+}
+
+function updateContinuousState() {
+    const shouldContinuousRender = hasMixerAnimation || isDissolving;
+    renderLoop.setContinuous(shouldContinuousRender);
+    if (!shouldContinuousRender) {
+        renderLoop.requestRender();
     }
 }
 
@@ -338,23 +360,27 @@ function appear() {
 
     if (isDissolving) return;
     isDissolving = true;
+    updateContinuousState();
     signedDissolveSpeed = params.dissolveSpeed;
 
     for (let shader of shaders) {
         shader.uniforms.dissolveSpeed = { value: signedDissolveSpeed };
         shader.uniforms.dissolveProgress = { value: 0 };
     }
+    renderLoop.requestRender();
 }
 
 function disappear() {
 
     if (isDissolving) return;
     isDissolving = true;
+    updateContinuousState();
     signedDissolveSpeed = -params.dissolveSpeed;
 
     for (let shader of shaders) {
         shader.uniforms.dissolveSpeed = { value: signedDissolveSpeed };
         shader.uniforms.dissolveProgress = { value: 1 };
     }
+    renderLoop.requestRender();
 
 }
