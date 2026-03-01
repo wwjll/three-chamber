@@ -44,9 +44,10 @@ function normalizeDhParam(item) {
             alpha = 0,
             thetaOffset = 0,
             minAngle = -185,
-            maxAngle = 185
+            maxAngle = 185,
+            axisSign = 1
         ] = item;
-        return { theta, d, a, alpha, thetaOffset, minAngle, maxAngle };
+        return { theta, d, a, alpha, thetaOffset, minAngle, maxAngle, axisSign };
     }
     if (item && typeof item === 'object') {
         return {
@@ -56,10 +57,11 @@ function normalizeDhParam(item) {
             alpha: Number.isFinite(item.alpha) ? item.alpha : 0,
             thetaOffset: Number.isFinite(item.thetaOffset) ? item.thetaOffset : 0,
             minAngle: Number.isFinite(item.minAngle) ? item.minAngle : -185,
-            maxAngle: Number.isFinite(item.maxAngle) ? item.maxAngle : 185
+            maxAngle: Number.isFinite(item.maxAngle) ? item.maxAngle : 185,
+            axisSign: item.axisSign === -1 ? -1 : 1
         };
     }
-    return { theta: 0, d: 0, a: 0, alpha: 0, thetaOffset: 0, minAngle: -185, maxAngle: 185 };
+    return { theta: 0, d: 0, a: 0, alpha: 0, thetaOffset: 0, minAngle: -185, maxAngle: 185, axisSign: 1 };
 }
 
 export function ConvertMDH(params) {
@@ -72,12 +74,12 @@ export function ConvertMDH(params) {
         const prev = i > 0 ? normalizeDhParam(dhParams[i - 1]) : null;
         const a = i === 0 ? 0 : prev.a;
         const alpha = i === 0 ? 0 : prev.alpha;
-        result.push([cur.theta, cur.d, a, alpha, cur.thetaOffset, cur.minAngle, cur.maxAngle]);
+        result.push([cur.theta, cur.d, a, alpha, cur.thetaOffset, cur.minAngle, cur.maxAngle, cur.axisSign]);
     }
 
     if (n > 0) {
         const last = normalizeDhParam(dhParams[n - 1]);
-        result.push([0, 0, last.a, last.alpha, 0, -185, 185]);
+        result.push([0, 0, last.a, last.alpha, 0, -185, 185, 1]);
     }
 
     return result;
@@ -92,7 +94,7 @@ export function ConvertDH(params) {
     for (let i = 0; i < n; i++) {
         const cur = normalizeDhParam(mdhParams[i]);
         const next = normalizeDhParam(mdhParams[i + 1]);
-        result.push([cur.theta, cur.d, next.a, next.alpha, cur.thetaOffset, cur.minAngle, cur.maxAngle]);
+        result.push([cur.theta, cur.d, next.a, next.alpha, cur.thetaOffset, cur.minAngle, cur.maxAngle, cur.axisSign]);
     }
 
     return result;

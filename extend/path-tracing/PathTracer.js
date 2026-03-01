@@ -125,7 +125,7 @@ export class PathTracer {
 
     // set bounces
     setBounce(maxBounce) {
-        this.pathTracingMaterial.maxBounce = maxBounce;
+        this.pathTracingMaterial.maxBounce = Math.min(maxBounce, 8);
     }
 
     // set hdr texture

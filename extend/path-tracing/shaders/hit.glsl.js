@@ -1,4 +1,8 @@
 export const Hit =  /* glsl */`
+    #define STACK_SIZE 64
+    #define MAX_BVH_STEPS 256
+    #define MAX_TRIANGLES_PER_LEAF 8
+
     bool hitTriangle_MT97(Ray ray, vec3 vert0, vec3 vert1, vec3 vert2, inout float t, inout float u, inout float v) {
         // find vectors for two edges sharing vert0
         vec3 edge1 = vert1 - vert0;
@@ -48,7 +52,10 @@ export const Hit =  /* glsl */`
     }
     
     void hitTriangles(int begin, int end, inout Ray ray, inout RayHit hit) {
-        for(int i = begin; i <= end; ++i) {
+        // leaf size is 8, keep loop bound compile-time constant for driver compatibility.
+        for(int offset = 0; offset < MAX_TRIANGLES_PER_LEAF; ++offset) {
+        int i = begin + offset;
+        if(i > end) break;
         Triangle tri = getTriangle(float(i));
         hitTriangle(tri, ray, hit);
         }
@@ -120,10 +127,12 @@ export const Hit =  /* glsl */`
     }
 
     void hitBVH(Ray ray, inout RayHit hit) {
-        int stack[64];
+        int stack[STACK_SIZE];
         int sp = 0;
         stack[sp++] = 0;
-        while(sp > 0 && sp < 64) {
+        // Use bounded iterations to avoid problematic unbounded while loops on some ANGLE backends.
+        for(int iter = 0; iter < MAX_BVH_STEPS; ++iter) {
+            if(sp <= 0) break;
             
             int index = stack[--sp];
             BVHNode node = getBVHNode(float(index));
@@ -154,16 +163,16 @@ export const Hit =  /* glsl */`
                 if(dLeft < INFINITY && dRight < INFINITY) {
                     if(dLeft > 0.0 && dRight > 0.0) {
                         if(dLeft < dRight) {
-                            stack[sp++] = right;
-                            stack[sp++] = left;
+                            if(sp < STACK_SIZE) stack[sp++] = right;
+                            if(sp < STACK_SIZE) stack[sp++] = left;
                         } else {
-                            stack[sp++] = left;
-                            stack[sp++] = right;
+                            if(sp < STACK_SIZE) stack[sp++] = left;
+                            if(sp < STACK_SIZE) stack[sp++] = right;
                         }
                     } else if(dLeft > 0.0) {
-                        stack[sp++] = left;
+                        if(sp < STACK_SIZE) stack[sp++] = left;
                     } else if(dRight > 0.0) {
-                        stack[sp++] = right;
+                        if(sp < STACK_SIZE) stack[sp++] = right;
                     }
                 }
             }

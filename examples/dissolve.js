@@ -1,22 +1,28 @@
 
-
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TextureLoader } from 'three/src/loaders/TextureLoader.js';
-import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
+import { Pane } from 'tweakpane';
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 
-import { getAssetURL, getRenderLoopController } from '/extend/tools/Tool.js'
+import { getAssetURL, getRenderLoopController } from '/extend/tools/Tool.js';
+import {
+    DISSOLVE_VERTEX_COMMON,
+    DISSOLVE_VERTEX_UV,
+    DISSOLVE_FRAGMENT_COMMON,
+    DISSOLVE_FRAGMENT_TYPE0,
+    DISSOLVE_FRAGMENT_TYPE1
+} from '/extend/effect/legacy/Effect.js';
 
 const assetUrl = getAssetURL();
 const renderLoop = getRenderLoopController();
-const noiseTexture = assetUrl + "textures/noise.png"
-const fireTexture = assetUrl + "textures/fire.jpg"
-const modelUrl = assetUrl + "models/soldier.glb"
+const noiseTexture = assetUrl + 'textures/noise.png';
+const fireTexture = assetUrl + 'textures/fire.jpg';
+const modelUrl = assetUrl + 'models/soldier.glb';
 
 let camera, scene, renderer, controls, mixer;
-let stats, gui;
+let stats, pane;
 
 /* defines */
 const BG_COLOR = 0x111111;
@@ -36,7 +42,7 @@ let hasMixerAnimation = false;
 let params = {
     times: 'repeat',
     frameRate: FRAME_RATE,
-    edgeColor: 0xfa9200,
+    edgeColor: '#fa9200',
     edgeWidth: 0.1,
     dissolveSpeed: 0.01,
     dissolveProgress: 0,
@@ -109,34 +115,32 @@ function init() {
 
             /* GUI */
             {
-                gui = new GUI();
-                gui.add(params, 'frameRate', 5, 120).step(1).name('frameRate').onChange(v => {
-                    renderLoop.setFPS(v);
+                pane = new Pane({ title: 'Dissolve' });
+                pane.addBinding(params, 'frameRate', { min: 5, max: 120, step: 1 }).on('change', (ev) => {
+                    renderLoop.setFPS(ev.value);
                     renderLoop.requestRender();
                 });
-                gui.addColor(params, 'edgeColor').onChange(v => {
-
+                pane.addBinding(params, 'edgeColor', { view: 'color' }).on('change', (ev) => {
                     for (let shader of shaders) {
-                        shader.uniforms.edgeColor = { value: new THREE.Color(v) };
+                        if (shader.uniforms.edgeColor) {
+                            shader.uniforms.edgeColor.value.set(ev.value);
+                        }
                     }
                     renderLoop.requestRender();
-
                 });
-                gui.add(params, 'edgeWidth', 0.01, 1).step(0.01).onChange(v => {
-
+                pane.addBinding(params, 'edgeWidth', { min: 0.01, max: 1, step: 0.01 }).on('change', (ev) => {
                     for (let shader of shaders) {
-                        shader.uniforms.edgeWidth = { value: v };
+                        if (shader.uniforms.edgeWidth) {
+                            shader.uniforms.edgeWidth.value = ev.value;
+                        }
                     }
                     renderLoop.requestRender();
-
                 });
-
-                gui.add(params, 'dissolveSpeed', 0.01, 0.1).step(0.01).onChange(() => {
+                pane.addBinding(params, 'dissolveSpeed', { min: 0.01, max: 0.1, step: 0.01 }).on('change', () => {
                     renderLoop.requestRender();
                 });
-                gui.add(params, 'appear');
-                gui.add(params, 'disappear');
-
+                pane.addButton({ title: 'appear' }).on('click', () => appear());
+                pane.addButton({ title: 'disappear' }).on('click', () => disappear());
             }
 
             // animations
@@ -256,61 +260,6 @@ function updateContinuousState() {
 /* utils */
 
 function setDissolveShader(shader, type = 1) {
-
-    const _types = [
-
-        function _type0(shader) {
-
-            setCommon(shader);
-
-            // shader main
-            shader.fragmentShader = shader.fragmentShader.replace(
-                '#include <dithering_fragment>',
-        /* glsl */`
-            #include <dithering_fragment>
-            float noiseValue = texture2D(noiseTexture, xUv).r;
-            vec4 finalColor = linearToOutputTexel( vec4(edgeColor, gl_FragColor.a) );
-            if(noiseValue > dissolveProgress)
-            {
-                discard;
-            }
-            
-            if(noiseValue + edgeWidth > dissolveProgress){
-                gl_FragColor = vec4(finalColor.rgb, 1.0);
-            }
-        `
-
-            );
-
-        },
-        function _type1(shader) {
-
-            setCommon(shader);
-
-            // shader main
-            shader.fragmentShader = shader.fragmentShader.replace(
-                '#include <dithering_fragment>',
-        /* glsl */`
-            #include <dithering_fragment>
-            float noiseValue = texture2D(noiseTexture, xUv).r;
-            
-            vec4 finalColor = texture2D(edgeColorTexture, xUv);
-            // vec4 finalColor = linearToOutputTexel( vec4(edgeColor, gl_FragColor.a) );
-
-            float alpha = step(noiseValue - edgeWidth, dissolveProgress);
-            gl_FragColor.a = alpha;
-
-            float useOrigin = step(noiseValue, dissolveProgress);
-            gl_FragColor.rgb = mix(finalColor.rgb, gl_FragColor.rgb, useOrigin);
-
-        `
-            );
-
-        }
-
-    ];
-
-
     function setCommon(shader) {
 
         shader.uniforms.edgeColor = { value: new THREE.Color(params.edgeColor) };
@@ -322,37 +271,23 @@ function setDissolveShader(shader, type = 1) {
 
         shader.vertexShader = shader.vertexShader.replace(
             '#include <common>',
-            [
-                'varying vec2 xUv;',
-                '#include <common>'
-            ].join('\n')
+            DISSOLVE_VERTEX_COMMON
         );
 
         shader.vertexShader = shader.vertexShader.replace(
             '#include <uv_vertex>',
-            [
-                'xUv = uv;',
-                '#include <uv_vertex>'
-            ].join('\n')
+            DISSOLVE_VERTEX_UV
         );
 
-        // shader headers
         shader.fragmentShader = shader.fragmentShader.replace(
             '#include <common>',
-    /* glsl */ `
-        #include <common>
-        uniform float dissolveProgress;
-        uniform float edgeWidth;
-        uniform vec3 edgeColor;
-        uniform sampler2D noiseTexture;
-        uniform sampler2D edgeColorTexture;
-        varying vec2 xUv;
-    `
+            DISSOLVE_FRAGMENT_COMMON
         );
-
     }
 
-    _types[type](shader);
+    setCommon(shader);
+    const fragmentBody = type === 0 ? DISSOLVE_FRAGMENT_TYPE0 : DISSOLVE_FRAGMENT_TYPE1;
+    shader.fragmentShader = shader.fragmentShader.replace('#include <dithering_fragment>', fragmentBody);
 
 }
 

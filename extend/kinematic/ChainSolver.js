@@ -17,6 +17,7 @@ export class ChainSolver {
             : 'Position Only';
         this.debug = options.debug === true;
         this.joints = Array.isArray(options.joints) ? options.joints : null;
+        this.thetaOffsets = Array.isArray(options.thetaOffsets) ? options.thetaOffsets.slice() : [];
         this._tmp = {
             p: new Vector3(),
             pi: new Vector3(),
@@ -34,6 +35,71 @@ export class ChainSolver {
         if (typeof options.forwardKinematics === 'function') {
             this.forwardKinematics = options.forwardKinematics;
         }
+    }
+
+    buildJointLimits(count) {
+        const limits = new Array(count);
+        const toRad = Math.PI / 180;
+        const joints = Array.isArray(this.joints) && this.joints.length > 0
+            ? this.joints
+            : (Array.isArray(this.chain?.joints) ? this.chain.joints : []);
+
+        for (let i = 0; i < count; i++) {
+            const joint = joints[i];
+            const minAngleDeg = Number.isFinite(joint?.minAngle) ? joint.minAngle : null;
+            const maxAngleDeg = Number.isFinite(joint?.maxAngle) ? joint.maxAngle : null;
+            if (!Number.isFinite(minAngleDeg) || !Number.isFinite(maxAngleDeg)) {
+                limits[i] = null;
+                continue;
+            }
+
+            const thetaOffset = Number.isFinite(joint?.dh?.thetaOffset)
+                ? joint.dh.thetaOffset
+                : (Number.isFinite(this.thetaOffsets[i]) ? this.thetaOffsets[i] : 0);
+            const qMin = minAngleDeg * toRad - thetaOffset;
+            const qMax = maxAngleDeg * toRad - thetaOffset;
+            // Keep min/max ordering as-is:
+            // - min <= max: normal interval clamp.
+            // - min > max: wrap-around interval (crosses +/-pi), used by ring DOF as well.
+            limits[i] = { min: qMin, max: qMax, wrap: qMin > qMax };
+        }
+
+        return limits;
+    }
+
+    wrapToPi(angle) {
+        return Math.atan2(Math.sin(angle), Math.cos(angle));
+    }
+
+    positiveModulo(value, mod) {
+        const out = value % mod;
+        return out < 0 ? out + mod : out;
+    }
+
+    clampJointValue(value, limit) {
+        if (!limit) return value;
+        if (limit.wrap !== true) {
+            if (value < limit.min) return limit.min;
+            if (value > limit.max) return limit.max;
+            return value;
+        }
+
+        // Wrap-around interval semantics:
+        // min > max means a cyclic interval on S1.
+        // Evaluate membership by measuring phase from min over one full turn.
+        const twoPi = Math.PI * 2;
+        const span = this.positiveModulo(limit.max - limit.min, twoPi);
+        if (span <= 1e-12) return value;
+
+        const phase = this.positiveModulo(value - limit.min, twoPi);
+        const inside = phase <= span;
+        if (inside) return value;
+
+        const distToMin = Math.min(phase, twoPi - phase);
+        const deltaToMax = Math.abs(phase - span);
+        const distToMax = Math.min(deltaToMax, twoPi - deltaToMax);
+        const targetBoundary = distToMin <= distToMax ? limit.min : limit.max;
+        return value + this.wrapToPi(targetBoundary - value);
     }
 
     computeTaskError(q) {
@@ -167,6 +233,10 @@ export class ChainSolver {
         const maxAlpha = 0.2;
         // Work on a copy so caller state is only replaced by the returned solution.
         const q = qe.slice();
+        const jointLimits = this.buildJointLimits(q.length);
+        for (let i = 0; i < q.length; i++) {
+            q[i] = this.clampJointValue(q[i], jointLimits[i]);
+        }
         // Position-only mode zeroes rotational error terms, but keeps the same pipeline.
         const includeRotation = this.isPositionAndRotationMode();
 
@@ -228,8 +298,9 @@ export class ChainSolver {
                     let dq = alphaTry * jtError;
                     if (dq > maxDelta) dq = maxDelta;
                     if (dq < -maxDelta) dq = -maxDelta;
-                    qCandidate[i] += dq;
-                    const absDq = Math.abs(dq);
+                    const nextQ = this.clampJointValue(qCandidate[i] + dq, jointLimits[i]);
+                    const absDq = Math.abs(nextQ - q[i]);
+                    qCandidate[i] = nextQ;
                     if (absDq > maxAbsDq) maxAbsDq = absDq;
                 }
 

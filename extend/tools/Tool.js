@@ -17,6 +17,7 @@ function getAssetURL() {
 const renderLoopController = new RenderLoopController();
 
 function getRenderLoopController() {
+    // make sure this is singleton instance in one context
     return renderLoopController;
 }
 

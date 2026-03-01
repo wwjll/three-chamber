@@ -1,15 +1,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
+import { Pane } from 'tweakpane';
+import { getRenderLoopController } from '../extend/tools/Tool.js';
 import { Chain } from '../extend/kinematic/Chain.js';
 import ChainSolver from '../extend/kinematic/ChainSolver.js';
 
-let scene, camera, renderer, controls, gui;
+let scene, camera, renderer, controls, pane;
 let chain;
-let endEffector;
+let actuator;
 let chainSolver;
-let targetModeController;
+let targetModeBinding;
 let qCurrent = [];
 let isSolving = false;
 let isSyncingTarget = false;
@@ -22,6 +23,11 @@ let solveActive = false;
 let targetTolerance = 1e-2;
 
 const BG_COLOR = 0x2b2b2b;
+const FRAME_RATE = 60;
+const renderLoop = getRenderLoopController();
+const renderLoopParams = {
+    renderOnIdle: false
+};
 
 const styleParams = {
     jointColor: 0x7d7d7d,
@@ -62,12 +68,12 @@ const solverParams = {
 };
 
 const kukaKr5 = [
-    { theta: 0, d: 0.4, a: 0.18, alpha: 90, minAngle: -185, maxAngle: 185 },
-    { theta: 90, d: 0, a: 0.6, alpha: 0, minAngle: -155, maxAngle: 35 },
-    { theta: 0, d: 0, a: 0.12, alpha: 90, minAngle: -130, maxAngle: 154 },
-    { theta: 0, d: 0.62, a: 0, alpha: -90, minAngle: -350, maxAngle: 350 },
-    { theta: 0, d: 0, a: 0, alpha: 90, minAngle: -130, maxAngle: 130 },
-    { theta: 0, d: 0.115, a: 0, alpha: 0, minAngle: -350, maxAngle: 350 }
+    { theta: 0, axisSign: 1, thetaOffset: 0, d: 0.4, a: 0.18, alpha: 90, minAngle: -155, maxAngle: 155 },
+    { theta: 90, axisSign: -1, thetaOffset: 0, d: 0, a: 0.6, alpha: 0, minAngle: -180, maxAngle: 65 },
+    { theta: 0, axisSign: 1, thetaOffset: 0, d: 0, a: 0.12, alpha: 90, minAngle: -15, maxAngle: 158 },
+    { theta: 0, axisSign: 1, thetaOffset: 0, d: 0.62, a: 0, alpha: -90, minAngle: -350, maxAngle: 350 },
+    { theta: 0, axisSign: 1, thetaOffset: 0, d: 0, a: 0, alpha: 90, minAngle: -130, maxAngle: 130 },
+    { theta: 0, axisSign: 1, thetaOffset: 0, d: 0.115, a: 0, alpha: 0, minAngle: -350, maxAngle: 350 }
 ];
 
 init();
@@ -88,12 +94,15 @@ function init() {
     controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0, 0.5);
     controls.update();
+    controls.addEventListener('change', () => {
+        renderLoop.requestRender();
+    });
 
     const gridHelper = new THREE.GridHelper(20, 20);
     scene.add(gridHelper);
 
     chain = new Chain(scene);
-    endEffector = createEndEffector(scene, camera, renderer.domElement);
+    actuator = createActuator(scene, camera, renderer.domElement);
     chainSolver = new ChainSolver({
         targetPosition: new THREE.Vector3(),
         targetQuaternion: new THREE.Quaternion(),
@@ -107,64 +116,81 @@ function init() {
             chain.updateJoint(q);
         }
     });
-    endEffector.controls.addEventListener('dragging-changed', (event) => {
+    actuator.controls.addEventListener('dragging-changed', (event) => {
         controls.enabled = !event.value;
         isDraggingTarget = event.value === true;
         if (!isDraggingTarget) {
             // Default behavior: solve once after drag end (mouse up).
             queueSolveFromTarget();
         }
+        renderLoop.requestRender();
     });
-    endEffector.controls.addEventListener('change', () => {
+    actuator.controls.addEventListener('change', () => {
         if (isDraggingTarget && solverParams.solveImmediately) {
             queueSolveFromTarget();
         }
+        renderLoop.requestRender();
     });
 
-    gui = new GUI({ title: 'GUI' });
-    gui.domElement.style.right = 'auto';
-    gui.domElement.style.left = '0px';
-    gui.domElement.style.top = '0px';
-    gui.domElement.style.margin = '0px';
-    gui.domElement.style.maxHeight = '100vh';
-    gui.domElement.style.overflow = 'auto';
+    renderLoop.configure({
+        fps: FRAME_RATE,
+        render: renderFrame
+    });
+    renderLoop.setRenderOnIdle(renderLoopParams.renderOnIdle);
 
-    const vizFolder = gui.addFolder('Viz');
-    vizFolder.add(styleParams, 'syncUp').name('Sync Up').onFinishChange(updateArm);
-    const helpersFolder = vizFolder.addFolder('Helpers');
-    helpersFolder
-        .add(styleParams, 'showAxisHelper')
-        .name('Axis Helper')
-        .onFinishChange(updateArm);
-    helpersFolder
-        .add(styleParams, 'showDOFHelper')
-        .name('DOF Helper')
-        .onFinishChange(updateArm);
-    helpersFolder.open();
-    vizFolder.open();
+    pane = new Pane({ title: 'IK' });
+    pane.element.style.right = 'auto';
+    pane.element.style.left = '0px';
+    pane.element.style.top = '0px';
+    pane.element.style.margin = '0px';
+    pane.element.style.maxHeight = '100vh';
+    pane.element.style.overflow = 'auto';
 
-    const controlsFolder = gui.addFolder('Control');
-    controlsFolder.add({ reset: resetAll }, 'reset').name('Reset');
-    controlsFolder
-        .add(solverParams, 'debug')
-        .name('Debug')
-        .onChange((value) => {
-            if (chainSolver) chainSolver.debug = value === true;
+    const vizFolder = pane.addFolder({ title: 'Viz' });
+    vizFolder.addBinding(styleParams, 'syncUp', { label: 'Sync Up' }).on('change', (ev) => {
+        if (ev.last === false) return;
+        updateArm();
+    });
+    const helpersFolder = vizFolder.addFolder({ title: 'Helpers' });
+    helpersFolder.addBinding(styleParams, 'showAxisHelper', { label: 'Axis Helper' }).on('change', (ev) => {
+        if (ev.last === false) return;
+        updateArm();
+    });
+    helpersFolder.addBinding(styleParams, 'showDOFHelper', { label: 'DOF Helper' }).on('change', (ev) => {
+        if (ev.last === false) return;
+        updateArm();
+    });
+    helpersFolder.expanded = true;
+    vizFolder.expanded = true;
+
+    const controlsFolder = pane.addFolder({ title: 'Control' });
+    controlsFolder.addButton({ title: 'Reset' }).on('click', () => {
+        resetAll();
+    });
+    controlsFolder.addBinding(solverParams, 'debug', { label: 'Debug' }).on('change', (ev) => {
+        if (chainSolver) chainSolver.debug = ev.value === true;
+    });
+    controlsFolder.addBinding(solverParams, 'solveImmediately', { label: 'Solve Immediately' });
+    controlsFolder.addBinding(renderLoopParams, 'renderOnIdle', { label: 'Render On Idle' }).on('change', (ev) => {
+        renderLoop.setRenderOnIdle(ev.value === true);
+    });
+    targetModeBinding = controlsFolder
+        .addBinding(solverParams, 'target', { label: 'Target', options: { Position: 'Position', Rotate: 'Rotate' } })
+        .on('change', (ev) => {
+            if (!actuator || !actuator.controls) return;
+            actuator.controls.setMode(ev.value === 'Rotate' ? 'rotate' : 'translate');
+            renderLoop.requestRender();
         });
     controlsFolder
-        .add(solverParams, 'solveImmediately')
-        .name('Solve Immediately');
-    targetModeController = controlsFolder
-        .add(solverParams, 'target', ['Position', 'Rotate'])
-        .name('Target')
-        .onChange((value) => {
-            if (!endEffector || !endEffector.controls) return;
-            endEffector.controls.setMode(value === 'Rotate' ? 'rotate' : 'translate');
-        });
-    controlsFolder
-        .add(solverParams, 'solveMode', ['Position Only', 'Position + Rotation'])
-        .name('IK Mode')
-        .onChange((value) => {
+        .addBinding(solverParams, 'solveMode', {
+            label: 'IK Mode',
+            options: {
+                'Position Only': 'Position Only',
+                'Position + Rotation': 'Position + Rotation'
+            }
+        })
+        .on('change', (ev) => {
+            const value = ev.value;
             if (chainSolver) chainSolver.solveMode = value;
             if (value === 'Position Only') {
                 // Reset orientation target to current robot pose when leaving orientation IK.
@@ -175,43 +201,41 @@ function init() {
                 }
             } else {
                 // Re-sync gizmo to current EE pose before enabling orientation objective.
-                updateEndEffector();
+                updateActuator();
                 syncPendingTargetFromControl();
             }
             syncPendingTargetFromControl();
             pendingSolve = true;
             solveActive = true;
+            renderLoop.requestRender();
         });
     controlsFolder
-        .add(solverParams, 'maxIter', 1, 200, 1)
-        .name('Max Iter')
-        .onChange((value) => {
-            if (chainSolver) chainSolver.maxIter = value;
+        .addBinding(solverParams, 'maxIter', { label: 'Max Iter', min: 1, max: 200, step: 1 })
+        .on('change', (ev) => {
+            if (chainSolver) chainSolver.maxIter = ev.value;
         });
     controlsFolder
-        .add(solverParams, 'alpha', 0.001, 0.5, 0.001)
-        .name('Alpha')
-        .onChange((value) => {
-            if (chainSolver) chainSolver.alpha = value;
+        .addBinding(solverParams, 'alpha', { label: 'Alpha', min: 0.001, max: 0.5, step: 0.001 })
+        .on('change', (ev) => {
+            if (chainSolver) chainSolver.alpha = ev.value;
         });
     controlsFolder
-        .add(solverParams, 'tolerance', 1e-5, 1e-1, 1e-5)
-        .name('Tolerance')
-        .onChange((value) => {
-            if (chainSolver) chainSolver.tolerance = value;
-            targetTolerance = value;
+        .addBinding(solverParams, 'tolerance', { label: 'Tolerance', min: 1e-5, max: 1e-1, step: 1e-5 })
+        .on('change', (ev) => {
+            if (chainSolver) chainSolver.tolerance = ev.value;
+            targetTolerance = ev.value;
         });
-    controlsFolder.open();
+    controlsFolder.expanded = true;
 
     buildKuka();
 
     window.addEventListener('resize', onResize);
-    animate();
+    renderLoop.requestRender();
 }
 
-function createEndEffector(scene, camera, domElement) {
+function createActuator(scene, camera, domElement) {
     const object = new THREE.Object3D();
-    object.name = 'endEffector';
+    object.name = 'actuator';
     object.matrixAutoUpdate = true;
     scene.add(object);
 
@@ -256,48 +280,74 @@ function createEndEffector(scene, camera, domElement) {
 }
 
 function buildKuka() {
-    qCurrent = kukaKr5.map(segment => THREE.MathUtils.degToRad(segment.theta));
+    qCurrent = kukaKr5.map((segment) => THREE.MathUtils.degToRad(Number.isFinite(segment.theta) ? segment.theta : 0));
     chain.update(getDhParametersFromQ(qCurrent), styleParams, baseParams);
-    attachEndEffector();
-    updateEndEffector();
+    attachActuator();
+    updateActuator();
     if (chainSolver) chainSolver.joints = chain.joints;
+    renderLoop.requestRender();
 }
 
 function updateArm() {
     chain.update(getDhParametersFromQ(qCurrent), styleParams, baseParams);
-    attachEndEffector();
-    updateEndEffector();
+    attachActuator();
+    updateActuator();
     if (chainSolver) chainSolver.joints = chain.joints;
+    renderLoop.requestRender();
 }
 
 function getDhParametersFromQ(q) {
     return kukaKr5.map((segment, index) => {
         const theta = Number.isFinite(q[index]) ? q[index] : 0;
-        const thetaOffset = THREE.MathUtils.degToRad(segment.thetaOffset ?? 0);
+        const axisSign = segment.axisSign === -1 ? -1 : 1;
+        const thetaOffsetDeg = Number.isFinite(segment.thetaOffset) ? segment.thetaOffset : 0;
+        const thetaOffset = THREE.MathUtils.degToRad(thetaOffsetDeg);
         const d = segment.d;
         const a = segment.a;
         const alpha = THREE.MathUtils.degToRad(segment.alpha);
-        return [theta, d, a, alpha, thetaOffset, segment.minAngle, segment.maxAngle];
+        const [minDhDeg, maxDhDeg] = convertAxisLimitsToDh(segment, axisSign, thetaOffsetDeg);
+        return [theta, d, a, alpha, thetaOffset, minDhDeg, maxDhDeg];
     });
 }
 
-function attachEndEffector() {
+function convertAxisLimitsToDh(segment, axisSign, thetaOffsetDeg) {
+    // Convert controller/axis-space limits to DH-space limits.
+    // If the source interval is wrap-around (min > max), keep wrap semantics.
+    const minAxisDeg = Number.isFinite(segment.minAngle) ? segment.minAngle : -185;
+    const maxAxisDeg = Number.isFinite(segment.maxAngle) ? segment.maxAngle : 185;
+    const isWrap = minAxisDeg > maxAxisDeg;
+
+    const mappedMin = axisSign * minAxisDeg + thetaOffsetDeg;
+    const mappedMax = axisSign * maxAxisDeg + thetaOffsetDeg;
+
+    if (!isWrap) {
+        return mappedMin <= mappedMax
+            ? [mappedMin, mappedMax]
+            : [mappedMax, mappedMin];
+    }
+
+    return axisSign === 1
+        ? [mappedMin, mappedMax]
+        : [mappedMax, mappedMin];
+}
+
+function attachActuator() {
     if (!chain.robotContainer) return;
-    if (endEffector.object.parent !== chain.robotContainer) {
-        chain.robotContainer.attach(endEffector.object);
+    if (actuator.object.parent !== chain.robotContainer) {
+        chain.robotContainer.attach(actuator.object);
     }
 }
 
-function updateEndEffector() {
+function updateActuator() {
     if (!chain.roboticArm) return;
-    const endEffectorLocalPosition = chain.getEndEffectorLocalPosition();
-    const endEffectorLocalQuaternion = chain.getEndEffectorLocalQuaternion(new THREE.Quaternion());
-    if (endEffectorLocalPosition) {
+    const actuatorLocalPosition = chain.getEndEffectorLocalPosition();
+    const actuatorLocalQuaternion = chain.getEndEffectorLocalQuaternion(new THREE.Quaternion());
+    if (actuatorLocalPosition) {
         isSyncingTarget = true;
         try {
-            endEffector.setLocalPosition(endEffectorLocalPosition);
-            if (endEffectorLocalQuaternion) {
-                endEffector.setLocalQuaternion(endEffectorLocalQuaternion);
+            actuator.setLocalPosition(actuatorLocalPosition);
+            if (actuatorLocalQuaternion) {
+                actuator.setLocalQuaternion(actuatorLocalQuaternion);
             }
         } finally {
             isSyncingTarget = false;
@@ -311,12 +361,13 @@ function queueSolveFromTarget() {
     syncPendingTargetFromControl();
     pendingSolve = true;
     solveActive = true;
+    renderLoop.requestRender();
 }
 
 function syncPendingTargetFromControl() {
-    if (!endEffector) return;
-    endEffector.getWorldPosition(pendingTarget);
-    endEffector.getWorldQuaternion(pendingTargetQuat);
+    if (!actuator) return;
+    actuator.getWorldPosition(pendingTarget);
+    actuator.getWorldQuaternion(pendingTargetQuat);
 }
 
 function solveIfPending() {
@@ -329,7 +380,7 @@ function solveIfPending() {
     try {
         qCurrent = chainSolver.solve(qCurrent);
         chain.update(getDhParametersFromQ(qCurrent), styleParams, baseParams);
-        attachEndEffector();
+        attachActuator();
         chainSolver.joints = chain.joints;
     } finally {
         isSolving = false;
@@ -349,12 +400,14 @@ function resetAll() {
     solveActive = false;
     isSolving = false;
     solverParams.target = 'Position';
-    if (targetModeController) targetModeController.updateDisplay();
-    if (endEffector && endEffector.controls) {
-        endEffector.controls.setMode('translate');
+    if (targetModeBinding && typeof targetModeBinding.refresh === 'function') {
+        targetModeBinding.refresh();
     }
-    if (endEffector && endEffector.object) {
-        endEffector.object.rotation.set(0, 0, 0);
+    if (actuator && actuator.controls) {
+        actuator.controls.setMode('translate');
+    }
+    if (actuator && actuator.object) {
+        actuator.object.rotation.set(0, 0, 0);
     }
     buildKuka();
 }
@@ -365,10 +418,13 @@ function onResize() {
     renderer.setSize(width, height);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
+    renderLoop.requestRender();
 }
 
-function animate() {
-    requestAnimationFrame(animate);
+function renderFrame() {
     solveIfPending();
     renderer.render(scene, camera);
+    if (pendingSolve || solveActive || isSolving) {
+        renderLoop.requestRender();
+    }
 }

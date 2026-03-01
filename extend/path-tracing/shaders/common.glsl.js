@@ -1,4 +1,5 @@
 export const Common =  /* glsl */`
+    #define MAX_BOUNCE_LOOP 8
 
     vec3 pathTrace() {
         Ray ray = createCameraRay();
@@ -7,7 +8,9 @@ export const Common =  /* glsl */`
         vec3 Li = vec3(0.0);
         vec3 history = vec3(1.0);
     
-        for(int bounce = 0; bounce < maxBounce; bounce++) {
+        // Use a compile-time bounded loop for better ANGLE backend compatibility.
+        for(int bounce = 0; bounce < MAX_BOUNCE_LOOP; bounce++) {
+            if(bounce >= maxBounce) break;
             // Russia Roulette
             float survivalProb = min(1.0, max(history.r, max(history.g, history.b)));
             if(rand() > survivalProb) break;

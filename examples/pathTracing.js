@@ -10,8 +10,8 @@ import { PathTracer } from "../extend/path-tracing/PathTracer";
 import { getAssetURL } from '/extend/tools/Tool.js'
 
 const assetUrl = getAssetURL();
-// const modelUrl = assetUrl + "models/bunny.glb";
-const modelUrl = assetUrl + "models/dragon.glb";
+const modelUrl = assetUrl + "models/bunny.glb";
+// const modelUrl = assetUrl + "models/dragon.glb";
 
 const envUrl = assetUrl + "hdrs/kiara_5_noon_2k.hdr";
 const info = document.querySelector("#info");

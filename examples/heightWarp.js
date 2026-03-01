@@ -1,11 +1,11 @@
 
-
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
+import { Pane } from 'tweakpane';
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 
-import { getAssetURL, getRenderLoopController } from '/extend/tools/Tool.js'
+import { getAssetURL, getRenderLoopController } from '/extend/tools/Tool.js';
+import { HEIGHT_WARP_VERTEX, HEIGHT_WARP_FRAGMENT } from '/extend/effect/legacy/Effect.js';
 
 const assetUrl = getAssetURL();
 const renderLoop = getRenderLoopController();
@@ -14,8 +14,8 @@ let options = {
     radius: 100,
     segments: 640,
     factor: 5,
-    map: assetUrl + "textures/8081_earthmap4k.jpg",
-    bump: assetUrl + "textures/8081_earthbump4k.jpg"
+    map: assetUrl + 'textures/8081_earthmap4k.jpg',
+    bump: assetUrl + 'textures/8081_earthbump4k.jpg'
 };
 
 const BG_COLOR = 0x111111;
@@ -26,7 +26,7 @@ let camera, controller;
 let scene;
 let loader;
 let geometry, material, mesh;
-let stats, gui;
+let stats, pane;
 
 init();
 
@@ -54,9 +54,9 @@ function initThree() {
 
     loader = new THREE.TextureLoader();
 
-    gui = new GUI();
-    gui.add(options, 'factor', 0, 50).onChange(e => {
-        material.uniforms.u_factor.value = e;
+    pane = new Pane({ title: 'HeightWarp' });
+    pane.addBinding(options, 'factor', { min: 0, max: 50, step: 0.1 }).on('change', (ev) => {
+        material.uniforms.u_factor.value = ev.value;
         renderLoop.requestRender();
     });
 
@@ -91,31 +91,6 @@ function initScene() {
     scene.add(ambientLight);
     scene.add(directionLight);
 
-    const earthShader = {
-        vertexShader: /* glsl */ `
-                    varying vec4 v_color;
-                    varying vec2 v_uv;
-                    uniform float u_factor;
-                    uniform float u_radius;
-                    uniform sampler2D u_bump;
-                    void main() {
-                        v_color = texture2D(u_bump, uv);
-                        v_uv = uv;
-                        float height = v_color.r * u_factor;
-                        float scale = (u_radius + height) / u_radius;
-                        vec3 vposition = position * scale;
-                        gl_Position = projectionMatrix * modelViewMatrix * vec4(vposition, 1.0); 
-                    }
-                `,
-        fragmentShader: /* glsl */ `
-                    uniform vec3 u_color;
-                    varying vec2 v_uv;
-                    uniform sampler2D u_map;
-                    void main() {
-                        gl_FragColor = vec4(u_color, 1.0) * texture2D(u_map, v_uv);
-                    }
-            `
-    };
     geometry = new THREE.SphereGeometry(options.radius, options.segments, options.segments);
     material = new THREE.ShaderMaterial({
         uniforms: {
@@ -137,8 +112,8 @@ function initScene() {
             },
         },
         transparent: true,
-        vertexShader: earthShader.vertexShader,
-        fragmentShader: earthShader.fragmentShader,
+        vertexShader: HEIGHT_WARP_VERTEX,
+        fragmentShader: HEIGHT_WARP_FRAGMENT,
     });
     mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);

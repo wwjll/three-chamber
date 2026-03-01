@@ -1,14 +1,19 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
+import { Pane } from 'tweakpane';
+import { getRenderLoopController } from '../extend/tools/Tool.js';
 import { Chain } from '../extend/kinematic/Chain.js';
 import { ConvertDH, ConvertMDH } from '../extend/kinematic/Utils.js';
 
-let scene, camera, renderer, controls, gui;
+let scene, camera, renderer, controls, pane;
 let createFolder, armsFolder, styleFolder;
 let chain;
 let suppressUpdate = false;
+let armFolderApis = [];
+let styleBindings = [];
 const BG_COLOR = 0x2b2b2b;
+const FRAME_RATE = 30;
+const renderLoop = getRenderLoopController();
 
 const styleParams = {
     jointColor: 0x7d7d7d,
@@ -45,7 +50,11 @@ function resetStyles() {
     Object.assign(styleParams, defaultStyleParams);
     saveStyles();
     updateArm();
-    styleFolder.controllers.forEach(c => c.updateDisplay());
+    for (const binding of styleBindings) {
+        if (typeof binding.refresh === 'function') {
+            binding.refresh();
+        }
+    }
 }
 
 function saveStyles() {
@@ -64,17 +73,20 @@ loadStyles();
 const createParams = {
     armSegments: [],
     reset: function () {
-        [...armsFolder.folders].forEach(folder => {
-            folder.destroy();
-        });
+        for (const folder of armFolderApis) {
+            folder.dispose();
+        }
+        armFolderApis = [];
         createParams.armSegments.length = 0;
         chain.generate([], styleParams, baseParams);
+        renderLoop.requestRender();
     },
     addArmSegment: function (initialParams) {
         initialParams = initialParams || {};
         const linkIndex = this.armSegments.length;
         const armParams = {
             theta: initialParams.theta ?? 0,
+            axisSign: initialParams.axisSign === -1 ? -1 : 1,
             thetaOffset: initialParams.thetaOffset ?? 0,
             d: initialParams.d ?? 0,
             a: initialParams.a ?? 1,
@@ -86,29 +98,59 @@ const createParams = {
         };
         this.armSegments.push(armParams);
 
-        const armFolder = armsFolder.addFolder(armParams.name);
+        const armFolder = armsFolder.addFolder({ title: armParams.name });
+        armFolderApis.push(armFolder);
 
         armParams.remove = function () {
             const armIndex = createParams.armSegments.indexOf(armParams);
             if (armIndex > -1) {
                 createParams.armSegments.splice(armIndex, 1);
             }
-            armFolder.destroy();
+            const folderIndex = armFolderApis.indexOf(armFolder);
+            if (folderIndex > -1) {
+                armFolderApis.splice(folderIndex, 1);
+            }
+            armFolder.dispose();
             updateArm();
         };
 
-        armFolder.add(armParams, 'theta', -180, 180).name('Theta').onFinishChange(updateArm);
-        armFolder
-            .add(armParams, 'thetaOffset', armParams.minAngle, armParams.maxAngle)
-            .name('Theta Offset')
-            .onFinishChange(updateArm);
-        armFolder.add(armParams, 'd', -10, 10).name('d').onFinishChange(updateArm);
-        armFolder.add(armParams, 'a', -10, 10).name('a').onFinishChange(updateArm);
-        armFolder.add(armParams, 'alpha', -180, 180).name('Alpha').onFinishChange(updateArm);
-        armFolder.add(armParams, 'remove').name('Remove Arm Segment');
-        armFolder.open();
+        armFolder.addBinding(armParams, 'theta', { min: -180, max: 180, label: 'Theta' }).on('change', (ev) => {
+            if (ev.last === false) return;
+            updateArm();
+        });
+        armFolder.addBinding(armParams, 'axisSign', {
+            label: 'Axis Sign',
+            options: { '+1': 1, '-1': -1 }
+        }).on('change', (ev) => {
+            if (ev.last === false) return;
+            updateArm();
+        });
+        armFolder.addBinding(armParams, 'thetaOffset', {
+            min: armParams.minAngle,
+            max: armParams.maxAngle,
+            label: 'Theta Offset'
+        }).on('change', (ev) => {
+            if (ev.last === false) return;
+            updateArm();
+        });
+        armFolder.addBinding(armParams, 'd', { min: -10, max: 10, label: 'd' }).on('change', (ev) => {
+            if (ev.last === false) return;
+            updateArm();
+        });
+        armFolder.addBinding(armParams, 'a', { min: -10, max: 10, label: 'a' }).on('change', (ev) => {
+            if (ev.last === false) return;
+            updateArm();
+        });
+        armFolder.addBinding(armParams, 'alpha', { min: -180, max: 180, label: 'Alpha' }).on('change', (ev) => {
+            if (ev.last === false) return;
+            updateArm();
+        });
+        armFolder.addButton({ title: 'Remove Arm Segment' }).on('click', () => {
+            armParams.remove();
+        });
+        armFolder.expanded = true;
 
-        gui.domElement.scrollTop = gui.domElement.scrollHeight;
+        pane.element.scrollTop = pane.element.scrollHeight;
         updateArm();
     }
 };
@@ -121,13 +163,17 @@ function segmentsToParamArray(segments) {
         segment.alpha ?? 0,
         segment.thetaOffset ?? 0,
         segment.minAngle ?? -185,
-        segment.maxAngle ?? 185
+        segment.maxAngle ?? 185,
+        segment.axisSign === -1 ? -1 : 1
     ]);
 }
 
 function rebuildSegmentsFromArray(paramArray) {
     suppressUpdate = true;
-    [...armsFolder.folders].forEach(folder => folder.destroy());
+    for (const folder of armFolderApis) {
+        folder.dispose();
+    }
+    armFolderApis = [];
     createParams.armSegments.length = 0;
     paramArray.forEach(params => {
         createParams.addArmSegment({
@@ -137,29 +183,53 @@ function rebuildSegmentsFromArray(paramArray) {
             alpha: params[3],
             thetaOffset: params[4],
             minAngle: params[5],
-            maxAngle: params[6]
+            maxAngle: params[6],
+            axisSign: params[7]
         });
     });
     suppressUpdate = false;
     updateArm();
 }
 
+function convertAxisLimitsToDh(segment) {
+    // Convert axis-space limits to DH-space limits.
+    // Wrap intervals (min > max) are preserved so DOF helper and solver share semantics.
+    const axisSign = segment.axisSign === -1 ? -1 : 1;
+    const thetaOffsetDeg = Number.isFinite(segment.thetaOffset) ? segment.thetaOffset : 0;
+    const minAxisDeg = Number.isFinite(segment.minAngle) ? segment.minAngle : -185;
+    const maxAxisDeg = Number.isFinite(segment.maxAngle) ? segment.maxAngle : 185;
+    const isWrap = minAxisDeg > maxAxisDeg;
+
+    const mappedMin = axisSign * minAxisDeg + thetaOffsetDeg;
+    const mappedMax = axisSign * maxAxisDeg + thetaOffsetDeg;
+
+    if (!isWrap) {
+        return mappedMin <= mappedMax
+            ? [mappedMin, mappedMax]
+            : [mappedMax, mappedMin];
+    }
+
+    return axisSign === 1
+        ? [mappedMin, mappedMax]
+        : [mappedMax, mappedMin];
+}
+
 const presets = {
     'TEST': {
         segments: [
-            { theta: 0, d: 0.5, a: 1, alpha: 90, thetaOffset: 0, minAngle: -185, maxAngle: 185 },
-            { theta: 0, d: 0.5, a: 1, alpha: 90, thetaOffset: 0, minAngle: -185, maxAngle: 185 },
-            { theta: 0, d: 0, a: 1, alpha: 90, thetaOffset: 0, minAngle: -185, maxAngle: 185 },
+            { theta: 0, d: 0.5, a: 1, alpha: 90, thetaOffset: 0, minAngle: -185, maxAngle: 185, axisSign: 1 },
+            { theta: 0, d: 0.5, a: 1, alpha: 90, thetaOffset: 0, minAngle: -185, maxAngle: 185, axisSign: 1 },
+            { theta: 0, d: 0, a: 1, alpha: 90, thetaOffset: 0, minAngle: -185, maxAngle: 185, axisSign: 1 },
         ]
     },
     'KUKA KR5': {
         segments: [
-            { theta: 0, d: 0.4, a: 0.18, alpha: 90, minAngle: -185, maxAngle: 185 },
-            { theta: 90, d: 0, a: 0.6, alpha: 0, minAngle: -155, maxAngle: 35 },
-            { theta: 0, d: 0, a: 0.12, alpha: 90, minAngle: -130, maxAngle: 154 },
-            { theta: 0, d: 0.62, a: 0, alpha: -90, minAngle: -350, maxAngle: 350 },
-            { theta: 0, d: 0, a: 0, alpha: 90, minAngle: -130, maxAngle: 130 },
-            { theta: 0, d: 0.115, a: 0, alpha: 0, minAngle: -350, maxAngle: 350 }
+            { theta: 0, d: 0.4, a: 0.18, alpha: 90, thetaOffset: 0, minAngle: -155, maxAngle: 155, axisSign: 1 },
+            { theta: 90, d: 0, a: 0.6, alpha: 0, thetaOffset: 0, minAngle: -180, maxAngle: 65, axisSign: -1 },
+            { theta: 0, d: 0, a: 0.12, alpha: 90, thetaOffset: 0, minAngle: -15, maxAngle: 158, axisSign: 1 },
+            { theta: 0, d: 0.62, a: 0, alpha: -90, thetaOffset: 0, minAngle: -350, maxAngle: 350, axisSign: 1 },
+            { theta: 0, d: 0, a: 0, alpha: 90, thetaOffset: 0, minAngle: -130, maxAngle: 130, axisSign: 1 },
+            { theta: 0, d: 0.115, a: 0, alpha: 0, thetaOffset: 0, minAngle: -350, maxAngle: 350, axisSign: 1 }
         ]
     },
     'PUMA 560': {
@@ -195,7 +265,8 @@ function loadPreset(name) {
         params.alpha ?? 0,
         params.thetaOffset ?? 0,
         params.minAngle ?? -185,
-        params.maxAngle ?? 185
+        params.maxAngle ?? 185,
+        params.axisSign === -1 ? -1 : 1
     ]);
     if (baseParams.mdhMode) {
         baseParams.useConvertedParams = true;
@@ -230,78 +301,110 @@ function init() {
     controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0, 0.5);
     controls.update();
+    controls.addEventListener('change', () => {
+        renderLoop.requestRender();
+    });
 
     const gridHelper = new THREE.GridHelper(20, 20);
     scene.add(gridHelper);
 
     chain = new Chain(scene);
+    renderLoop.configure({
+        fps: FRAME_RATE,
+        render: renderFrame
+    });
+    renderLoop.setRenderOnIdle(false);
 
-    gui = new GUI();
-    gui.domElement.style.right = 'auto';
-    gui.domElement.style.left = '0px';
-    gui.domElement.style.top = '0px';
-    gui.domElement.style.margin = '0px';
-    gui.domElement.style.maxHeight = '100vh';
-    gui.domElement.style.overflow = 'auto';
+    pane = new Pane({ title: 'DH Links' });
+    pane.element.style.right = 'auto';
+    pane.element.style.left = '0px';
+    pane.element.style.top = '0px';
+    pane.element.style.margin = '0px';
+    pane.element.style.maxHeight = '100vh';
+    pane.element.style.overflow = 'auto';
 
-    createFolder = gui.addFolder('Create');
-    createFolder.add(createParams, 'addArmSegment').name('Add Arm Segment');
-    createFolder.add(createParams, 'reset').name('Reset');
-    createFolder.open();
+    const bindStyle = (folder, key, options = {}) => {
+        const binding = folder.addBinding(styleParams, key, options);
+        binding.on('change', (ev) => {
+            if (ev.last === false) return;
+            updateArm();
+            saveStyles();
+        });
+        styleBindings.push(binding);
+        return binding;
+    };
 
-    const demoFolder = gui.addFolder('Demo');
-    demoFolder.add(demoParams, 'TEST');
-    demoFolder.add(demoParams, 'KUKA KR5');
-    demoFolder.add(demoParams, 'PUMA 560');
-    demoFolder.add(demoParams, 'Simple 6-DOF');
-    demoFolder.open();
+    createFolder = pane.addFolder({ title: 'Create' });
+    createFolder.addButton({ title: 'Add Arm Segment' }).on('click', () => createParams.addArmSegment());
+    createFolder.addButton({ title: 'Reset' }).on('click', () => createParams.reset());
+    createFolder.expanded = true;
 
-    const baseFolder = gui.addFolder('Base');
-    baseFolder.add(baseParams, 'mdhMode').name('MDH Mode').onFinishChange((value) => {
+    const demoFolder = pane.addFolder({ title: 'Demo' });
+    demoFolder.addButton({ title: 'TEST' }).on('click', () => demoParams.TEST());
+    demoFolder.addButton({ title: 'KUKA KR5' }).on('click', () => demoParams['KUKA KR5']());
+    demoFolder.addButton({ title: 'PUMA 560' }).on('click', () => demoParams['PUMA 560']());
+    demoFolder.addButton({ title: 'Simple 6-DOF' }).on('click', () => demoParams['Simple 6-DOF']());
+    demoFolder.expanded = true;
+
+    const baseFolder = pane.addFolder({ title: 'Base' });
+    baseFolder.addBinding(baseParams, 'mdhMode', { label: 'MDH Mode' }).on('change', (ev) => {
+        if (ev.last === false) return;
+        const value = ev.value;
         const params = segmentsToParamArray(createParams.armSegments);
         const converted = value ? ConvertMDH(params) : ConvertDH(params);
         baseParams.useConvertedParams = value;
         rebuildSegmentsFromArray(converted);
     });
-    const baseOffsetFolder = baseFolder.addFolder('Offset');
-    baseOffsetFolder.add(baseParams.baseOffset, 'x', -10, 10).name('Offset X').onFinishChange(updateArm);
-    baseOffsetFolder.add(baseParams.baseOffset, 'y', -10, 10).name('Offset Y').onFinishChange(updateArm);
-    baseOffsetFolder.add(baseParams.baseOffset, 'z', -10, 10).name('Offset Z').onFinishChange(updateArm);
-    baseFolder.open();
+    const baseOffsetFolder = baseFolder.addFolder({ title: 'Offset' });
+    baseOffsetFolder.addBinding(baseParams.baseOffset, 'x', { min: -10, max: 10, label: 'Offset X' }).on('change', (ev) => {
+        if (ev.last === false) return;
+        updateArm();
+    });
+    baseOffsetFolder.addBinding(baseParams.baseOffset, 'y', { min: -10, max: 10, label: 'Offset Y' }).on('change', (ev) => {
+        if (ev.last === false) return;
+        updateArm();
+    });
+    baseOffsetFolder.addBinding(baseParams.baseOffset, 'z', { min: -10, max: 10, label: 'Offset Z' }).on('change', (ev) => {
+        if (ev.last === false) return;
+        updateArm();
+    });
+    baseFolder.expanded = true;
 
-    styleFolder = gui.addFolder('Viz');
-    const jointsLinksFolder = styleFolder.addFolder('Joints && Links');
-    jointsLinksFolder.addColor(styleParams, 'jointColor').name('Joint Color').onFinishChange(updateArm).onChange(saveStyles);
-    jointsLinksFolder.addColor(styleParams, 'linkColor').name('Link Color').onFinishChange(updateArm).onChange(saveStyles);
-    jointsLinksFolder.add(styleParams, 'randomJointColor').name('Random Joint Color').onFinishChange(updateArm).onChange(saveStyles);
-    jointsLinksFolder.add(styleParams, 'randomLinkColor').name('Random Link Color').onFinishChange(updateArm).onChange(saveStyles);
-    jointsLinksFolder.add(styleParams, 'jointRadius', 0.01, 0.5).name('Joint Radius').onFinishChange(updateArm).onChange(saveStyles);
-    jointsLinksFolder.add(styleParams, 'jointHeight', 0.01, 0.5).name('Joint Height').onFinishChange(updateArm).onChange(saveStyles);
-    jointsLinksFolder.add(styleParams, 'linkRadius', 0.01, 0.2).name('Link Radius').onFinishChange(updateArm).onChange(saveStyles);
-    jointsLinksFolder.add(styleParams, 'syncUp').name('Sync Up').onFinishChange(updateArm).onChange(saveStyles);
+    styleFolder = pane.addFolder({ title: 'Viz' });
+    const jointsLinksFolder = styleFolder.addFolder({ title: 'Joints && Links' });
+    bindStyle(jointsLinksFolder, 'jointColor', { label: 'Joint Color', view: 'color' });
+    bindStyle(jointsLinksFolder, 'linkColor', { label: 'Link Color', view: 'color' });
+    bindStyle(jointsLinksFolder, 'randomJointColor', { label: 'Random Joint Color' });
+    bindStyle(jointsLinksFolder, 'randomLinkColor', { label: 'Random Link Color' });
+    bindStyle(jointsLinksFolder, 'jointRadius', { min: 0.01, max: 0.5, label: 'Joint Radius' });
+    bindStyle(jointsLinksFolder, 'jointHeight', { min: 0.01, max: 0.5, label: 'Joint Height' });
+    bindStyle(jointsLinksFolder, 'linkRadius', { min: 0.01, max: 0.2, label: 'Link Radius' });
+    bindStyle(jointsLinksFolder, 'syncUp', { label: 'Sync Up' });
 
-    const helpersFolder = styleFolder.addFolder('Helpers');
-    const axisFolder = helpersFolder.addFolder('Axis');
-    axisFolder.add(styleParams, 'showAxisHelper').name('Axis Helper').onFinishChange(updateArm).onChange(saveStyles);
-    axisFolder.add(styleParams, 'axisHelperSize', 0.01, 2).name('Axis Size').onFinishChange(updateArm).onChange(saveStyles);
+    const helpersFolder = styleFolder.addFolder({ title: 'Helpers' });
+    const axisFolder = helpersFolder.addFolder({ title: 'Axis' });
+    bindStyle(axisFolder, 'showAxisHelper', { label: 'Axis Helper' });
+    bindStyle(axisFolder, 'axisHelperSize', { min: 0.01, max: 2, label: 'Axis Size' });
 
-    const dofFolder = helpersFolder.addFolder('DOF');
-    dofFolder.add(styleParams, 'showDOFHelper').name('DOF Helper').onFinishChange(updateArm).onChange(saveStyles);
-    dofFolder.addColor(styleParams, 'dofColor').name('DOF Color').onFinishChange(updateArm).onChange(saveStyles);
-    dofFolder.add(styleParams, 'dofOpacity', 0, 1).name('DOF Opacity').onFinishChange(updateArm).onChange(saveStyles);
-    dofFolder.add(styleParams, 'dofUseJointColor').name('Use Random Color').onFinishChange(updateArm).onChange(saveStyles);
-    dofFolder.add(styleParams, 'dofUseAutoRadius').name('DOF Auto Radius').onFinishChange(updateArm).onChange(saveStyles);
-    dofFolder.add(styleParams, 'dofRadius', 0.001, 2).name('DOF Radius').onFinishChange(updateArm).onChange(saveStyles);
-    dofFolder.add(styleParams, 'dofRadiusScale', 0.01, 1).name('DOF Radius Scale').onFinishChange(updateArm).onChange(saveStyles);
-    dofFolder.add(styleParams, 'dofThicknessRatio', 0.01, 1).name('DOF Thickness').onFinishChange(updateArm).onChange(saveStyles);
-    dofFolder.add(styleParams, 'dofSegments', 3, 128, 1).name('DOF Segments').onFinishChange(updateArm).onChange(saveStyles);
-    dofFolder.add(styleParams, 'dofOffsetZ', 0, 0.01).name('DOF Offset Z').onFinishChange(updateArm).onChange(saveStyles);
+    const dofFolder = helpersFolder.addFolder({ title: 'DOF' });
+    bindStyle(dofFolder, 'showDOFHelper', { label: 'DOF Helper' });
+    bindStyle(dofFolder, 'dofColor', { label: 'DOF Color', view: 'color' });
+    bindStyle(dofFolder, 'dofOpacity', { min: 0, max: 1, label: 'DOF Opacity' });
+    bindStyle(dofFolder, 'dofUseJointColor', { label: 'Use Random Color' });
+    bindStyle(dofFolder, 'dofUseAutoRadius', { label: 'DOF Auto Radius' });
+    bindStyle(dofFolder, 'dofRadius', { min: 0.001, max: 2, label: 'DOF Radius' });
+    bindStyle(dofFolder, 'dofRadiusScale', { min: 0.01, max: 1, label: 'DOF Radius Scale' });
+    bindStyle(dofFolder, 'dofThicknessRatio', { min: 0.01, max: 1, label: 'DOF Thickness' });
+    bindStyle(dofFolder, 'dofSegments', { min: 3, max: 128, step: 1, label: 'DOF Segments' });
+    bindStyle(dofFolder, 'dofOffsetZ', { min: 0, max: 0.01, label: 'DOF Offset Z' });
 
-    styleFolder.add({ reset: resetStyles }, 'reset').name('Reset Styles');
-    styleFolder.open();
+    styleFolder.addButton({ title: 'Reset Styles' }).on('click', () => {
+        resetStyles();
+    });
+    styleFolder.expanded = true;
 
-    armsFolder = gui.addFolder('Link');
-    armsFolder.open();
+    armsFolder = pane.addFolder({ title: 'Link' });
+    armsFolder.expanded = true;
 
     window.addEventListener('resize', () => {
         const windwoWidth = window.innerWidth;
@@ -317,9 +420,10 @@ function init() {
                 target.material.resolution.set(windwoWidth, windowHeight);
             }
         }
+        renderLoop.requestRender();
     });
 
-    animate();
+    renderLoop.requestRender();
 }
 
 function updateArm() {
@@ -330,13 +434,13 @@ function updateArm() {
         const d = segment.d;
         const a = segment.a;
         const alpha = THREE.MathUtils.degToRad(segment.alpha);
-        return [theta, d, a, alpha, thetaOffset, segment.minAngle, segment.maxAngle];
+        const [minDhDeg, maxDhDeg] = convertAxisLimitsToDh(segment);
+        return [theta, d, a, alpha, thetaOffset, minDhDeg, maxDhDeg, segment.axisSign === -1 ? -1 : 1];
     });
     chain.update(dhParameters, styleParams, baseParams);
+    renderLoop.requestRender();
 }
 
-function animate() {
-    requestAnimationFrame(animate);
+function renderFrame() {
     renderer.render(scene, camera);
-    controls.update();
 }
