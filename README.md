@@ -17,6 +17,14 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
 # Featured Projects
 
+-   **IK Pick**
+
+    Pick-and-place robotic arm demo with IK, staged motion, and physics-based cube grasp/release.
+
+    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/ikPick.html)
+
+    ![IK Pick](./assets/docs/IKPick.png)
+
 -   **Simple IK**
 
     Position/rotation target driven IK demo with draggable end-effector control.  
