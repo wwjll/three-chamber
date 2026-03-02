@@ -12,6 +12,7 @@
   "author": "wwjll",
   "license": "ISC",
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.14.0",
     "@tweenjs/tween.js": "21.1.1",
     "gl-matrix": "^3.4.3",
     "parcel": "^2.14.0",

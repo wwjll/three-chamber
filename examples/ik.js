@@ -194,7 +194,7 @@ function init() {
             if (chainSolver) chainSolver.solveMode = value;
             if (value === 'Position Only') {
                 // Reset orientation target to current robot pose when leaving orientation IK.
-                const currentQuat = chain.getEndEffectorWorldQuaternion(tmpQuat);
+                const currentQuat = chain.getActuatorWorldQuaternion(tmpQuat);
                 if (currentQuat && chainSolver) {
                     pendingTargetQuat.copy(currentQuat);
                     chainSolver.targetQuaternion.copy(currentQuat);
@@ -340,8 +340,8 @@ function attachActuator() {
 
 function updateActuator() {
     if (!chain.roboticArm) return;
-    const actuatorLocalPosition = chain.getEndEffectorLocalPosition();
-    const actuatorLocalQuaternion = chain.getEndEffectorLocalQuaternion(new THREE.Quaternion());
+    const actuatorLocalPosition = chain.getActuatorLocalPosition();
+    const actuatorLocalQuaternion = chain.getActuatorLocalQuaternion(new THREE.Quaternion());
     if (actuatorLocalPosition) {
         isSyncingTarget = true;
         try {

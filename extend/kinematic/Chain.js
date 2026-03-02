@@ -337,7 +337,7 @@ export class Chain {
         this.generate(dhParameters, styleParams, baseParams);
     }
 
-    getEndEffectorNode() {
+    getActuatorNode() {
         if (!this.robotContainer) return null;
         this.robotContainer.updateMatrixWorld(true);
 
@@ -363,32 +363,52 @@ export class Chain {
         return current;
     }
 
-    getEndEffectorWorldPosition(out = new THREE.Vector3()) {
-        const node = this.getEndEffectorNode();
+    getActuatorWorldPosition(out = new THREE.Vector3()) {
+        const node = this.getActuatorNode();
         if (!node) return null;
         return node.getWorldPosition(out);
     }
 
-    getEndEffectorWorldQuaternion(out = new THREE.Quaternion()) {
-        const node = this.getEndEffectorNode();
+    getActuatorWorldQuaternion(out = new THREE.Quaternion()) {
+        const node = this.getActuatorNode();
         if (!node) return null;
         return node.getWorldQuaternion(out);
     }
 
-    getEndEffectorLocalPosition(out = new THREE.Vector3()) {
+    getActuatorLocalPosition(out = new THREE.Vector3()) {
         if (!this.robotContainer) return null;
-        const worldPos = this.getEndEffectorWorldPosition(out);
+        const worldPos = this.getActuatorWorldPosition(out);
         if (!worldPos) return null;
         return this.robotContainer.worldToLocal(worldPos);
     }
 
-    getEndEffectorLocalQuaternion(out = new THREE.Quaternion()) {
+    getActuatorLocalQuaternion(out = new THREE.Quaternion()) {
         if (!this.robotContainer) return null;
-        const worldQuat = this.getEndEffectorWorldQuaternion(_tmpWorldQuat);
+        const worldQuat = this.getActuatorWorldQuaternion(_tmpWorldQuat);
         if (!worldQuat) return null;
         this.robotContainer.updateMatrixWorld(true);
         this.robotContainer.getWorldQuaternion(_tmpParentQuat);
         return out.copy(_tmpParentQuat).invert().multiply(worldQuat).normalize();
+    }
+
+    getEndEffectorNode() {
+        return this.getActuatorNode();
+    }
+
+    getEndEffectorWorldPosition(out = new THREE.Vector3()) {
+        return this.getActuatorWorldPosition(out);
+    }
+
+    getEndEffectorWorldQuaternion(out = new THREE.Quaternion()) {
+        return this.getActuatorWorldQuaternion(out);
+    }
+
+    getEndEffectorLocalPosition(out = new THREE.Vector3()) {
+        return this.getActuatorLocalPosition(out);
+    }
+
+    getEndEffectorLocalQuaternion(out = new THREE.Quaternion()) {
+        return this.getActuatorLocalQuaternion(out);
     }
 
     updateJoint(q = []) {

@@ -106,12 +106,12 @@ export class ChainSolver {
         if (typeof this.forwardKinematics === 'function') {
             this.forwardKinematics(q);
         }
-        const endEffectorPosition = this.chain?.getEndEffectorWorldPosition?.(this._tmp.p)
+        const endEffectorPosition = this.chain?.getActuatorWorldPosition?.(this._tmp.p)
             ?? this._tmp.p.set(0, 0, 0);
         const posErr = this._tmp.posErr.copy(this.targetPosition).sub(endEffectorPosition);
         const rotErr = this._tmp.rotErr.set(0, 0, 0);
 
-        const currentQuat = this.chain?.getEndEffectorWorldQuaternion?.(this._tmp.currentQuat)
+        const currentQuat = this.chain?.getActuatorWorldQuaternion?.(this._tmp.currentQuat)
             ?? this._tmp.currentQuat.identity();
         const invCurrentQuat = this._tmp.invCurrentQuat.copy(currentQuat).invert();
         const deltaQuat = this._tmp.deltaQuat
@@ -164,7 +164,7 @@ export class ChainSolver {
         const n = q.length;
         const jacobian = [new Array(n), new Array(n), new Array(n), new Array(n), new Array(n), new Array(n)];
         const joints = this.joints || [];
-        const endEffectorPosition = this.chain?.getEndEffectorWorldPosition?.(this._tmp.p)
+        const endEffectorPosition = this.chain?.getActuatorWorldPosition?.(this._tmp.p)
             ?? this._tmp.p.set(0, 0, 0);
         const p = this._tmp.p.copy(endEffectorPosition);
         const pi = this._tmp.pi;
