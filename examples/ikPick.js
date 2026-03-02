@@ -31,6 +31,8 @@ const tmpGripWorldQuat = new THREE.Quaternion();
 const tmpContainerPos = new THREE.Vector3();
 const tmpLerpTargetPos = new THREE.Vector3();
 const tmpLerpTargetQuat = new THREE.Quaternion();
+const tmpStageTaskPos = new THREE.Vector3();
+const tmpStageTaskQuat = new THREE.Quaternion();
 const tmpCubeWorldPos = new THREE.Vector3();
 const tmpCubeLocalPos = new THREE.Vector3();
 const pickRaycaster = new THREE.Raycaster();
@@ -39,6 +41,7 @@ let solveActive = false;
 let targetTolerance = 1e-2;
 let pickSequence = null;
 let stageLerp = null;
+let stageTask = null;
 let physicsWorld = null;
 let physicsReady = false;
 let graspProbeBody = null;
@@ -625,6 +628,7 @@ function clearPickCubes() {
 function clearPickLerp() {
     // Clearing this resets any in-flight interpolation/wait transition.
     stageLerp = null;
+    stageTask = null;
 }
 
 function releaseGrabbedCube() {
@@ -715,29 +719,80 @@ function computePickTargetFromCube(cubeItem, hover, outPos, outQuat) {
     return true;
 }
 
-function startStageLerpFromCurrent(targetPos, targetQuat, durationMs, onComplete = null, solveWhileLerping = true) {
-    if (!ikTarget) return;
+function startStageTask(taskFactory, context = {}) {
+    if (!ikTarget || typeof taskFactory !== 'function') return false;
+    const iterator = taskFactory(context);
+    if (!iterator || typeof iterator.next !== 'function') return false;
+    stageTask = { iterator };
+    return startNextStageStep();
+}
+
+function startNextStageStep(lastStep = null) {
+    if (!ikTarget || !stageTask?.iterator) {
+        stageTask = null;
+        stageLerp = null;
+        return false;
+    }
+
+    let nextState;
+    try {
+        nextState = stageTask.iterator.next(lastStep);
+    } catch (_error) {
+        stageTask = null;
+        stageLerp = null;
+        return false;
+    }
+    if (!nextState || nextState.done === true) {
+        stageTask = null;
+        stageLerp = null;
+        return false;
+    }
+
+    const step = nextState.value ?? {};
+    const durationMs = Math.max(1, Number.isFinite(step.duration) ? step.duration : 1);
+    const solveWhileLerping = step.solveWhileLerping === true;
+    resolveStageStepPosition(step.position, tmpStageTaskPos);
+    resolveStageStepQuaternion(step.quaternion, tmpStageTaskQuat);
+
     stageLerp = {
+        name: typeof step.name === 'string' ? step.name : '',
         startMs: performance.now(),
-        durationMs: Math.max(1, Number.isFinite(durationMs) ? durationMs : 1),
-        onComplete,
+        durationMs,
         solveWhileLerping,
         fromPos: ikTarget.object.position.clone(),
         fromQuat: ikTarget.object.quaternion.clone(),
-        toPos: targetPos.clone(),
-        toQuat: targetQuat.clone(),
+        toPos: tmpStageTaskPos.clone(),
+        toQuat: tmpStageTaskQuat.clone(),
     };
+    return true;
 }
 
-function startStageWait(durationMs, onComplete = null) {
-    if (!ikTarget) return;
-    startStageLerpFromCurrent(
-        ikTarget.object.position,
-        ikTarget.object.quaternion,
-        durationMs,
-        onComplete,
-        false,
-    );
+function resolveStageStepPosition(source, out) {
+    if (!ikTarget) return out.set(0, 0, 0);
+    if (typeof source === 'function') {
+        source = source();
+    }
+    if (source?.isVector3 === true) {
+        return out.copy(source);
+    }
+    if (Array.isArray(source) && source.length >= 3) {
+        return out.set(source[0], source[1], source[2]);
+    }
+    return out.copy(ikTarget.object.position);
+}
+
+function resolveStageStepQuaternion(source, out) {
+    if (!ikTarget) return out.identity();
+    if (typeof source === 'function') {
+        source = source();
+    }
+    if (source?.isQuaternion === true) {
+        return out.copy(source);
+    }
+    if (Array.isArray(source) && source.length >= 4) {
+        return out.set(source[0], source[1], source[2], source[3]).normalize();
+    }
+    return out.copy(ikTarget.object.quaternion);
 }
 
 function updateStageLerp() {
@@ -752,9 +807,10 @@ function updateStageLerp() {
     }
 
     if (t >= 1) {
-        const done = stageLerp.onComplete;
-        stageLerp = null;
-        if (typeof done === 'function') done();
+        const finished = { name: stageLerp.name };
+        if (!startNextStageStep(finished)) {
+            stageLerp = null;
+        }
     }
     return true;
 }
@@ -784,14 +840,21 @@ function getOpenStageHover(cubeItem) {
 function startPickSequence(cubeItem) {
     if (!cubeItem || !ikTarget) return;
     clearPickLerp();
-    pickSequence = { cube: cubeItem, stage: 'approachLerp' };
+    pickSequence = { cube: cubeItem, stage: 'approachFlow' };
     const ok = computePickTargetFromCube(cubeItem, getOpenStageHover(cubeItem), tmpLerpTargetPos, tmpLerpTargetQuat);
     if (!ok) return;
-    startStageLerpFromCurrent(tmpLerpTargetPos, tmpLerpTargetQuat, pickParams.approachDurationMs, () => {
-        if (!pickSequence || pickSequence.stage !== 'approachLerp') return;
+    startStageTask(function* () {
+        yield {
+            name: 'approachLerp',
+            position: () => tmpLerpTargetPos,
+            quaternion: () => tmpLerpTargetQuat,
+            duration: pickParams.approachDurationMs,
+            solveWhileLerping: true,
+        };
+        if (!pickSequence || pickSequence.stage !== 'approachFlow') return;
         pickSequence.stage = 'approach';
         queueSolveFromTarget();
-    });
+    }, { cubeItem });
     renderControl.requestRender();
 }
 
@@ -866,28 +929,38 @@ function advancePickSequence() {
     }
 
     if (pickSequence.stage === 'approach') {
-        pickSequence.stage = 'waitOpen';
-        startStageWait(pickParams.stageDelayMs, () => {
-            if (!pickSequence || pickSequence.stage !== 'waitOpen') return;
+        pickSequence.stage = 'approachFlow';
+        startStageTask(function* () {
+            yield {
+                name: 'waitOpen',
+                duration: pickParams.stageDelayMs,
+                solveWhileLerping: false,
+            };
+            if (!pickSequence || pickSequence.stage !== 'approachFlow') return;
             actuator?.open();
-            pickSequence.stage = 'waitDescend';
 
-            startStageWait(pickParams.stageDelayMs, () => {
-                if (!pickSequence || pickSequence.stage !== 'waitDescend') return;
-                const ok = computePickTargetFromCube(cubeItem, PICK_DESCEND_HOVER, tmpLerpTargetPos, tmpLerpTargetQuat);
-                if (!ok) {
-                    pickSequence.stage = 'descend';
-                    queueSolveFromTarget();
-                    return;
-                }
-                pickSequence.stage = 'descendLerp';
-                startStageLerpFromCurrent(tmpLerpTargetPos, tmpLerpTargetQuat, pickParams.descendDurationMs, () => {
-                    if (!pickSequence || pickSequence.stage !== 'descendLerp') return;
-                    pickSequence.stage = 'descend';
-                    queueSolveFromTarget();
-                });
-                renderControl.requestRender();
-            });
+            yield {
+                name: 'waitDescend',
+                duration: pickParams.stageDelayMs,
+                solveWhileLerping: false,
+            };
+            if (!pickSequence || pickSequence.stage !== 'approachFlow') return;
+            const ok = computePickTargetFromCube(cubeItem, PICK_DESCEND_HOVER, tmpLerpTargetPos, tmpLerpTargetQuat);
+            if (!ok) {
+                pickSequence.stage = 'descend';
+                queueSolveFromTarget();
+                return;
+            }
+            yield {
+                name: 'descendLerp',
+                position: () => tmpLerpTargetPos,
+                quaternion: () => tmpLerpTargetQuat,
+                duration: pickParams.descendDurationMs,
+                solveWhileLerping: true,
+            };
+            if (!pickSequence || pickSequence.stage !== 'approachFlow') return;
+            pickSequence.stage = 'descend';
+            queueSolveFromTarget();
             renderControl.requestRender();
         });
         return;
@@ -905,9 +978,16 @@ function advancePickSequence() {
             queueSolveFromTarget();
             return;
         }
-        pickSequence.stage = 'liftLerp';
-        startStageLerpFromCurrent(tmpLerpTargetPos, tmpLerpTargetQuat, pickParams.liftDurationMs, () => {
-            if (!pickSequence || pickSequence.stage !== 'liftLerp') return;
+        pickSequence.stage = 'liftFlow';
+        startStageTask(function* () {
+            yield {
+                name: 'liftLerp',
+                position: () => tmpLerpTargetPos,
+                quaternion: () => tmpLerpTargetQuat,
+                duration: pickParams.liftDurationMs,
+                solveWhileLerping: true,
+            };
+            if (!pickSequence || pickSequence.stage !== 'liftFlow') return;
             pickSequence.stage = 'lift';
             queueSolveFromTarget();
         });
@@ -916,34 +996,44 @@ function advancePickSequence() {
     }
 
     if (pickSequence.stage === 'lift') {
-        pickSequence.stage = 'waitCarry';
-        startStageWait(pickParams.stageDelayMs, () => {
-            if (!pickSequence || pickSequence.stage !== 'waitCarry') return;
+        pickSequence.stage = 'carryFlow';
+        startStageTask(function* () {
+            yield {
+                name: 'waitCarry',
+                duration: pickParams.stageDelayMs,
+                solveWhileLerping: false,
+            };
+            if (!pickSequence || pickSequence.stage !== 'carryFlow') return;
             const ok = setPickTargetToContainer(pickParams.graspHover);
             if (!ok) {
                 pickSequence.stage = 'carryToContainer';
                 queueSolveFromTarget();
                 return;
             }
-            pickSequence.stage = 'carryLerp';
-            startStageLerpFromCurrent(tmpLerpTargetPos, tmpLerpTargetQuat, pickParams.carryDurationMs, () => {
-                if (!pickSequence || pickSequence.stage !== 'carryLerp') return;
-                pickSequence.stage = 'carryToContainer';
-                queueSolveFromTarget();
-            });
+            yield {
+                name: 'carryLerp',
+                position: () => tmpLerpTargetPos,
+                quaternion: () => tmpLerpTargetQuat,
+                duration: pickParams.carryDurationMs,
+                solveWhileLerping: true,
+            };
+            if (!pickSequence || pickSequence.stage !== 'carryFlow') return;
+            pickSequence.stage = 'carryToContainer';
+            queueSolveFromTarget();
             renderControl.requestRender();
         });
         return;
     }
 
-    if (pickSequence.stage === 'carryLerp') {
-        return;
-    }
-
     if (pickSequence.stage === 'carryToContainer') {
-        pickSequence.stage = 'waitDrop';
-        startStageWait(pickParams.stageDelayMs, () => {
-            if (!pickSequence || pickSequence.stage !== 'waitDrop') return;
+        pickSequence.stage = 'dropFlow';
+        startStageTask(function* () {
+            yield {
+                name: 'waitDrop',
+                duration: pickParams.stageDelayMs,
+                solveWhileLerping: false,
+            };
+            if (!pickSequence || pickSequence.stage !== 'dropFlow') return;
             releaseGrabbedCube();
             actuator?.open();
             clearPickLerp();
