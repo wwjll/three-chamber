@@ -1,3 +1,40 @@
+/**
+ * @fileoverview Iterative IK solver for a serial chain with optional orientation control.
+ *
+ * Solver model:
+ * - Uses Jacobian-based iterative updates with a simple backtracking line-search.
+ * - Supports two modes:
+ *   - `Position Only`
+ *   - `Position + Rotation`
+ * - Applies joint limits each step (`buildJointLimits` + `clampJointValue`).
+ *
+ * Expected external dependencies:
+ * - `chain.getActuatorWorldPosition(out)` and `chain.getActuatorWorldQuaternion(out)`.
+ * - `joint.getWorldPosition(out)` and `joint.getWorldAxis(out)` for Jacobian columns.
+ * - Optional `forwardKinematics(q)` callback to push candidate `q` into scene transforms.
+ *
+ * Key public fields and meaning:
+ * - `targetPosition`: desired end-effector world position.
+ * - `targetQuaternion`: desired end-effector world orientation.
+ * - `chain`: chain wrapper used for querying current actuator pose.
+ * - `joints`: ordered joint list for Jacobian construction.
+ * - `maxIter`: max solver iterations per solve call.
+ * - `alpha`: base step size used for update scaling.
+ * - `tolerance`: convergence threshold (task-space norm).
+ * - `solveMode`: `'Position Only'` or `'Position + Rotation'`.
+ * - `debug`: enables optional verbose logging hooks.
+ *
+ * `_tmp` scratch fields (allocation-free math workspace):
+ * - `p`: current end-effector world position.
+ * - `pi`: current joint world position.
+ * - `ai`: current joint world axis.
+ * - `r`: lever arm vector (`p - pi`).
+ * - `jcol`: temporary Jacobian translational column (`ai x r`).
+ * - `posErr`: position error vector.
+ * - `rotErr`: axis-angle rotation error vector.
+ * - `currentQuat`, `invCurrentQuat`, `deltaQuat`: orientation error pipeline.
+ * - `errorVec6`: packed task error `[ex, ey, ez, erx, ery, erz]`.
+ */
 import { Quaternion, Vector3 } from 'three';
 
 export class ChainSolver {

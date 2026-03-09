@@ -33,7 +33,7 @@ const JOINT_SIZE = {
     radialSegments: 8,
 };
 
-export class DOFHelper extends Object3D {
+class DOFHelper extends Object3D {
     constructor(joint, options = {}) {
         super();
 
@@ -196,4 +196,4 @@ class IKHelper {
     }
 }
 
-export default IKHelper;
+export { DOFHelper, IKHelper };

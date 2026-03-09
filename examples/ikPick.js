@@ -1,3 +1,44 @@
+/**
+ * @fileoverview IK pick-and-place demo integrating Three.js rendering, IK solving,
+ * and Rapier physics-based grasping.
+ *
+ * Runtime architecture:
+ * - Rendering/UI: Three.js scene + OrbitControls + TransformControls + Tweakpane.
+ * - Kinematics: `Chain` + `ChainSolver` drive arm joints from an IK target.
+ * - End-effector: `Actuator` provides tool transform, jaw animation, and colliders.
+ * - Physics: Rapier simulates cubes/ground/container and grasp joint constraints.
+ *
+ * Main flow:
+ * 1) User picks a cube in the scene (`onScenePickClick`).
+ * 2) Stage machine (`pickSequence`) runs approach -> descend -> grip -> lift -> carry -> drop.
+ * 3) During grip, jaw contacts are evaluated and a fixed impulse joint is created.
+ * 4) Release happens when jaw opening (`jawInnerGap`) reaches/exceeds cube size.
+ *
+ * Key state variables (names and roles):
+ * - `scene`, `camera`, `renderer`, `controls`, `pane`: render/UI handles.
+ * - `chain`, `actuator`, `ikTarget`, `chainSolver`: kinematic/actuator core objects.
+ * - `qCurrent`: current joint configuration (radians).
+ * - `isSolving`, `pendingSolve`, `solveActive`: IK scheduling/solve flags.
+ * - `pendingTarget`, `pendingTargetQuat`: end-node world target derived from grip target.
+ * - `pickSequence`: pick state machine context (`cube`, `stage`, timing fields).
+ * - `stageTask`, `stageLerp`: generic staged wait/lerp execution state.
+ * - `physicsWorld`, `physicsReady`: Rapier world lifecycle.
+ * - `physicsCubes`: spawned dynamic cube records (`body`, `collider`, `mesh`, `size`).
+ * - `graspJoint`: active fixed impulse joint between tool body and grabbed cube body.
+ * - `graspedCube`: cube currently constrained by `graspJoint`.
+ * - `containerBody`, `containerColliders`: fixed drop-zone physics bodies.
+ * - `reachRangeGroup`, `reachInnerRing`, `reachOuterRing`: visual reach indicator meshes.
+ *
+ * Naming conventions:
+ * - `tmp*` variables are reusable temporary vectors/quaternions to avoid allocations.
+ * - `*Params` objects expose live-configurable parameters through UI.
+ * - `*Folder` names correspond to Tweakpane sections.
+ *
+ * Collision-group helpers:
+ * - `encodeInteractionGroups(memberships, filters)` packs 16-bit masks into uint32.
+ * - `HELD_CUBE_INTERACTION_GROUPS` excludes `GRIPPER_GROUP` while grasped to reduce
+ *   constraint-vs-contact fighting during carry.
+ */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
@@ -26,13 +67,20 @@ const tmpSpawnTargetPos = new THREE.Vector3();
 const tmpBasePos = new THREE.Vector3();
 const tmpPickPos = new THREE.Vector3();
 const tmpVerticalGraspQuat = new THREE.Quaternion();
-const tmpGripWorldPos = new THREE.Vector3();
-const tmpGripWorldQuat = new THREE.Quaternion();
 const tmpContainerPos = new THREE.Vector3();
 const tmpLerpTargetPos = new THREE.Vector3();
 const tmpLerpTargetQuat = new THREE.Quaternion();
 const tmpStageTaskPos = new THREE.Vector3();
 const tmpStageTaskQuat = new THREE.Quaternion();
+const tmpGraspWorldPos = new THREE.Vector3();
+const tmpBodyPosA = new THREE.Vector3();
+const tmpBodyPosB = new THREE.Vector3();
+const tmpBodyQuatA = new THREE.Quaternion();
+const tmpBodyQuatB = new THREE.Quaternion();
+const tmpInvBodyQuat = new THREE.Quaternion();
+const tmpLocalAnchorA = new THREE.Vector3();
+const tmpLocalAnchorB = new THREE.Vector3();
+const tmpJointLocalRotB = new THREE.Quaternion();
 const tmpCubeWorldPos = new THREE.Vector3();
 const tmpCubeLocalPos = new THREE.Vector3();
 const pickRaycaster = new THREE.Raycaster();
@@ -44,9 +92,8 @@ let stageLerp = null;
 let stageTask = null;
 let physicsWorld = null;
 let physicsReady = false;
-let graspProbeBody = null;
-let graspProbeCollider = null;
-let grabbedCube = null;
+let physicsDebugLines = null;
+let physicsDebugRgbBuffer = null;
 let containerBody = null;
 const containerColliders = [];
 let reachRangeGroup = null;
@@ -55,12 +102,24 @@ let reachOuterRing = null;
 let fixedDropLathe = null;
 const physicsCubes = [];
 const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
+let graspJoint = null;
+let graspedCube = null;
+let prevJawInnerGap = null;
+let isGripButtonHeld = false;
 
 const BG_COLOR = 0x2b2b2b;
 const FRAME_RATE = 60;
 const PICK_STAGE_DELAY_MS = 50;
-const PICK_DESCEND_HOVER = 0.005;
-const GRASP_PROBE_RADIUS = 0.035;
+const DESCEND_STAGE_TOLERANCE = 0.008;
+const DESCEND_STAGE_TIMEOUT_MS = 1200;
+const PICK_STAGE_POSITION_TOLERANCE = 0.006;
+const JAW_GAP_OPEN_EPS = 1e-4;
+const INTERACTION_ALL = 0xffff;
+const GRIPPER_GROUP = 1 << 1;
+const INTERACTION_ALL_BUT_GRIPPER = INTERACTION_ALL & ~GRIPPER_GROUP;
+const encodeInteractionGroups = (memberships, filters) => ((((memberships & 0xffff) << 16) | (filters & 0xffff)) >>> 0);
+const DEFAULT_INTERACTION_GROUPS = encodeInteractionGroups(INTERACTION_ALL, INTERACTION_ALL);
+const HELD_CUBE_INTERACTION_GROUPS = encodeInteractionGroups(INTERACTION_ALL, INTERACTION_ALL_BUT_GRIPPER);
 const CONTAINER_RIM_HEIGHT = 0.22;
 const CONTAINER_OUTER_RADIUS = 0.21;
 const GRID_TEXTURE_URL = `${getAssetURL()}textures/grid.png`;
@@ -111,18 +170,24 @@ const actuatorParams = {
     showHelper: false,
 };
 
+const helperParams = {
+    showPhysicsColliders: true,
+    showColliderAxes: false,
+};
+
 const pickParams = {
-    spawnCount: 6,
+    spawnCount: 10,
     outerRadius: 1.3,
     innerRadius: 1.1,
     dropHeight: 0.35,
-    cubeSize: 0.06,
+    cubeSize: 0.04,
     graspHover: 0.5,
     stageDelayMs: PICK_STAGE_DELAY_MS,
     approachDurationMs: 300,
     descendDurationMs: 100,
     liftDurationMs: 200,
     carryDurationMs: 400,
+    gripCloseStep: 0.02,
 };
 
 const kukaKr5 = [
@@ -165,6 +230,7 @@ async function init() {
     chain = new Chain(scene);
     actuator = new Actuator({
         scene,
+        physicsWorld,
         toolEulerDeg: actuatorParams.toolEuler,
     });
     ikTarget = createIKTarget(scene, camera, renderer.domElement);
@@ -227,6 +293,12 @@ async function init() {
         }
         renderControl.requestRender();
     });
+    helpersFolder.addBinding(helperParams, 'showPhysicsColliders', { label: 'Collider Debug' }).on('change', () => {
+        renderControl.requestRender();
+    });
+    helpersFolder.addBinding(helperParams, 'showColliderAxes', { label: 'Collider Axes' }).on('change', () => {
+        renderControl.requestRender();
+    });
     helpersFolder.expanded = true;
 
     const controlsFolder = pane.addFolder({ title: 'Control' });
@@ -279,16 +351,35 @@ async function init() {
     pickFolder.addBinding(pickParams, 'descendDurationMs', { label: 'Descend ms', min: 50, max: 2000, step: 10 });
     pickFolder.addBinding(pickParams, 'liftDurationMs', { label: 'Lift ms', min: 50, max: 2000, step: 10 });
     pickFolder.addBinding(pickParams, 'carryDurationMs', { label: 'Carry ms', min: 50, max: 3000, step: 10 });
+    pickFolder.addBinding(pickParams, 'gripCloseStep', { label: 'Grip Step', min: 0.002, max: 0.05, step: 0.001 });
     pickFolder.addButton({ title: 'Spawn Cubes' }).on('click', () => {
         spawnPickCubes();
     });
     pickFolder.addButton({ title: 'Clear Cubes' }).on('click', () => {
         clearPickCubes();
     });
+    const gripButton = pickFolder.addButton({ title: 'Grip' });
+    gripButton.on('click', () => {
+        runManualGripStep();
+        renderControl.requestRender();
+    });
+    const gripButtonElement = gripButton.element.querySelector('button') ?? gripButton.element;
+    gripButtonElement.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        isGripButtonHeld = true;
+        runManualGripStep();
+        renderControl.requestRender();
+    });
+    window.addEventListener('pointerup', () => {
+        isGripButtonHeld = false;
+    });
+    window.addEventListener('pointercancel', () => {
+        isGripButtonHeld = false;
+    });
     pickFolder.addButton({ title: 'Drop' }).on('click', () => {
         clearPickLerp();
         pickSequence = null;
-        releaseGrabbedCube();
+        releaseGraspJoint();
         actuator?.open();
         renderControl.requestRender();
     });
@@ -331,7 +422,6 @@ async function initPhysics() {
 
     physicsWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     createPhysicsGround();
-    createGraspProbe();
     physicsReady = true;
 }
 
@@ -354,15 +444,87 @@ function createPhysicsGround() {
     );
 }
 
-function createGraspProbe() {
-    if (!physicsWorld || graspProbeBody || graspProbeCollider) return;
-    graspProbeBody = physicsWorld.createRigidBody(
-        RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, -10, 0),
-    );
-    graspProbeCollider = physicsWorld.createCollider(
-        RAPIER.ColliderDesc.ball(GRASP_PROBE_RADIUS).setSensor(true),
-        graspProbeBody,
-    );
+function ensurePhysicsDebugLines() {
+    if (physicsDebugLines || !scene) return;
+    const geometry = new THREE.BufferGeometry();
+    const material = new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.75,
+        depthWrite: false,
+    });
+    physicsDebugLines = new THREE.LineSegments(geometry, material);
+    physicsDebugLines.name = 'physics_debug_lines';
+    physicsDebugLines.frustumCulled = false;
+    physicsDebugLines.renderOrder = 1000;
+    physicsDebugLines.visible = false;
+    scene.add(physicsDebugLines);
+}
+
+function updatePhysicsDebugLines() {
+    if (!physicsWorld) return false;
+    ensurePhysicsDebugLines();
+    if (!physicsDebugLines) return false;
+    if (!helperParams.showPhysicsColliders) {
+        physicsDebugLines.visible = false;
+        return false;
+    }
+
+    const { vertices, colors } = physicsWorld.debugRender();
+
+    const isSingleAxisColor = (r, g, b) => {
+        const eps = 1e-4;
+        let nonZero = 0;
+        if (Math.abs(r) > eps) nonZero += 1;
+        if (Math.abs(g) > eps) nonZero += 1;
+        if (Math.abs(b) > eps) nonZero += 1;
+        return nonZero === 1;
+    };
+
+    let drawVertices = vertices;
+    let drawColors = colors;
+    if (!helperParams.showColliderAxes) {
+        const filteredVertices = [];
+        const filteredColors = [];
+        const segmentCount = Math.floor(vertices.length / 6);
+        for (let s = 0; s < segmentCount; s++) {
+            const vBase = s * 6;
+            const cBase = s * 8;
+            const c1IsAxis = isSingleAxisColor(colors[cBase], colors[cBase + 1], colors[cBase + 2]);
+            const c2IsAxis = isSingleAxisColor(colors[cBase + 4], colors[cBase + 5], colors[cBase + 6]);
+            if (c1IsAxis && c2IsAxis) {
+                continue;
+            }
+            filteredVertices.push(
+                vertices[vBase], vertices[vBase + 1], vertices[vBase + 2],
+                vertices[vBase + 3], vertices[vBase + 4], vertices[vBase + 5],
+            );
+            filteredColors.push(
+                colors[cBase], colors[cBase + 1], colors[cBase + 2], colors[cBase + 3],
+                colors[cBase + 4], colors[cBase + 5], colors[cBase + 6], colors[cBase + 7],
+            );
+        }
+        drawVertices = new Float32Array(filteredVertices);
+        drawColors = new Float32Array(filteredColors);
+    }
+
+    const vertexCount = drawVertices.length / 3;
+    if (!physicsDebugRgbBuffer || physicsDebugRgbBuffer.length !== vertexCount * 3) {
+        physicsDebugRgbBuffer = new Float32Array(vertexCount * 3);
+    }
+    for (let i = 0, j = 0; i < vertexCount; i++, j += 3) {
+        const c = i * 4;
+        physicsDebugRgbBuffer[j] = drawColors[c];
+        physicsDebugRgbBuffer[j + 1] = drawColors[c + 1];
+        physicsDebugRgbBuffer[j + 2] = drawColors[c + 2];
+    }
+
+    const geometry = physicsDebugLines.geometry;
+    geometry.setAttribute('position', new THREE.BufferAttribute(drawVertices, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(physicsDebugRgbBuffer, 3));
+    geometry.computeBoundingSphere();
+    physicsDebugLines.visible = true;
+    return vertexCount > 0;
 }
 
 function getContainerDims() {
@@ -573,7 +735,8 @@ function spawnPickCubes() {
             RAPIER.RigidBodyDesc.dynamic()
                 .setTranslation(x, y, z)
                 .setLinearDamping(0.2)
-                .setAngularDamping(0.3),
+                .setAngularDamping(0.3)
+                .setCcdEnabled(true),
         );
         const collider = physicsWorld.createCollider(
             RAPIER.ColliderDesc.cuboid(size * 0.5, size * 0.5, size * 0.5)
@@ -588,7 +751,15 @@ function spawnPickCubes() {
         mesh.position.set(x, y, z);
         scene.add(mesh);
 
-        const cubeItem = { body, collider, mesh, size };
+        const cubeItem = {
+            body,
+            collider,
+            mesh,
+            size,
+            savedCollisionGroups: null,
+            savedSolverGroups: null,
+            gripFilterApplied: false,
+        };
         mesh.userData.pickCube = cubeItem;
         physicsCubes.push(cubeItem);
     }
@@ -599,7 +770,7 @@ function spawnPickCubes() {
 function clearPickCubes() {
     clearPickLerp();
     pickSequence = null;
-    releaseGrabbedCube();
+    releaseGraspJoint();
     if (physicsWorld) {
         for (const item of physicsCubes) {
             if (item.collider) {
@@ -625,82 +796,215 @@ function clearPickCubes() {
     renderControl.requestRender();
 }
 
+function copyBodyPose(body, outPos, outQuat) {
+    const t = body.translation();
+    const r = body.rotation();
+    outPos.set(t.x, t.y, t.z);
+    outQuat.set(r.x, r.y, r.z, r.w);
+}
+
+function worldToBodyLocalPoint(body, worldPoint, out) {
+    copyBodyPose(body, tmpBodyPosA, tmpBodyQuatA);
+    tmpInvBodyQuat.copy(tmpBodyQuatA).invert();
+    return out.copy(worldPoint).sub(tmpBodyPosA).applyQuaternion(tmpInvBodyQuat);
+}
+
+function applyHeldCubeCollisionFilter(cubeItem) {
+    if (!cubeItem?.collider || cubeItem.gripFilterApplied) return;
+    cubeItem.savedCollisionGroups = cubeItem.collider.collisionGroups();
+    cubeItem.savedSolverGroups = cubeItem.collider.solverGroups();
+    cubeItem.collider.setCollisionGroups(HELD_CUBE_INTERACTION_GROUPS);
+    cubeItem.collider.setSolverGroups(HELD_CUBE_INTERACTION_GROUPS);
+    cubeItem.gripFilterApplied = true;
+}
+
+function restoreHeldCubeCollisionFilter(cubeItem) {
+    if (!cubeItem?.collider || !cubeItem.gripFilterApplied) return;
+    const collisionGroups = Number.isFinite(cubeItem.savedCollisionGroups)
+        ? cubeItem.savedCollisionGroups
+        : DEFAULT_INTERACTION_GROUPS;
+    const solverGroups = Number.isFinite(cubeItem.savedSolverGroups)
+        ? cubeItem.savedSolverGroups
+        : DEFAULT_INTERACTION_GROUPS;
+    cubeItem.collider.setCollisionGroups(collisionGroups);
+    cubeItem.collider.setSolverGroups(solverGroups);
+    cubeItem.savedCollisionGroups = null;
+    cubeItem.savedSolverGroups = null;
+    cubeItem.gripFilterApplied = false;
+}
+
+function areCollidersTouching(colliderA, colliderB) {
+    if (!physicsWorld || !colliderA || !colliderB) return false;
+    let hasContact = false;
+    physicsWorld.contactPair(colliderA, colliderB, () => {
+        hasContact = true;
+    });
+    return hasContact || physicsWorld.intersectionPair(colliderA, colliderB);
+}
+
+function releaseGraspJoint() {
+    restoreHeldCubeCollisionFilter(graspedCube);
+    if (!physicsWorld || !graspJoint) {
+        graspJoint = null;
+        graspedCube = null;
+        return;
+    }
+    physicsWorld.removeImpulseJoint(graspJoint, true);
+    graspJoint = null;
+    graspedCube = null;
+}
+
+function createGraspJointForCube(toolBody, cubeItem) {
+    if (!toolBody || !cubeItem?.body || !physicsWorld) return false;
+    const cubeT = cubeItem.body.translation();
+    tmpGraspWorldPos.set(cubeT.x, cubeT.y, cubeT.z);
+    worldToBodyLocalPoint(toolBody, tmpGraspWorldPos, tmpLocalAnchorA);
+    tmpLocalAnchorB.set(0, 0, 0);
+    copyBodyPose(toolBody, tmpBodyPosA, tmpBodyQuatA);
+    copyBodyPose(cubeItem.body, tmpBodyPosB, tmpBodyQuatB);
+    tmpJointLocalRotB.copy(tmpBodyQuatB).invert().multiply(tmpBodyQuatA).normalize();
+
+    graspJoint = physicsWorld.createImpulseJoint(
+        RAPIER.JointData.fixed(
+            { x: tmpLocalAnchorA.x, y: tmpLocalAnchorA.y, z: tmpLocalAnchorA.z },
+            { x: 0, y: 0, z: 0, w: 1 },
+            { x: tmpLocalAnchorB.x, y: tmpLocalAnchorB.y, z: tmpLocalAnchorB.z },
+            { x: tmpJointLocalRotB.x, y: tmpJointLocalRotB.y, z: tmpJointLocalRotB.z, w: tmpJointLocalRotB.w },
+        ),
+        toolBody,
+        cubeItem.body,
+        true,
+    );
+    graspedCube = cubeItem;
+    applyHeldCubeCollisionFilter(cubeItem);
+    cubeItem.body.wakeUp();
+    return true;
+}
+
+function getJawContactState(cubeItem) {
+    if (!physicsWorld || !actuator || !cubeItem?.collider) {
+        return { left: false, right: false };
+    }
+    const { left, right } = actuator.getJawColliders();
+    if (!left || !right) {
+        return { left: false, right: false };
+    }
+    return {
+        left: areCollidersTouching(left, cubeItem.collider),
+        right: areCollidersTouching(right, cubeItem.collider),
+    };
+}
+
+function pickJawContactCandidate(cubeList) {
+    if (!actuator || !Array.isArray(cubeList) || cubeList.length === 0) return null;
+    const jawGap = actuator.getJawInnerGap();
+    for (const cubeItem of cubeList) {
+        if (!cubeItem?.collider || !cubeItem?.body || !cubeItem?.mesh?.parent) continue;
+        const contact = getJawContactState(cubeItem);
+        const hasDual = contact.left && contact.right;
+        if (!hasDual) continue;
+        const cubeSize = Number.isFinite(cubeItem.size) ? cubeItem.size : pickParams.cubeSize;
+        if (jawGap <= 0.92 * cubeSize) {
+            return cubeItem;
+        }
+    }
+    return null;
+}
+
+function startLiftAfterGrip(cubeItem) {
+    if (!pickSequence || pickSequence.cube !== cubeItem) return;
+    const ok = computePickTargetFromCube(cubeItem, pickParams.graspHover, tmpLerpTargetPos, tmpLerpTargetQuat);
+    if (!ok) {
+        pickSequence.stage = 'lift';
+        queueSolveFromTarget();
+        return;
+    }
+    pickSequence.stage = 'liftFlow';
+    startStageTask(function* () {
+        yield {
+            name: 'liftLerp',
+            position: () => tmpLerpTargetPos,
+            quaternion: () => tmpLerpTargetQuat,
+            duration: pickParams.liftDurationMs,
+            solveWhileLerping: true,
+        };
+        if (!pickSequence || pickSequence.stage !== 'liftFlow') return;
+        pickSequence.stage = 'lift';
+        queueSolveFromTarget();
+    });
+    renderControl.requestRender();
+}
+
+function updateGripFlow() {
+    if (!pickSequence || pickSequence.stage !== 'gripFlow' || !actuator) return;
+    const cubeItem = pickSequence.cube;
+    if (!cubeItem?.mesh?.parent || !cubeItem?.body || !cubeItem?.collider) {
+        releaseGraspJoint();
+        clearPickLerp();
+        pickSequence = null;
+        return;
+    }
+    const toolBody = actuator.getPhysicsBody();
+    if (!toolBody) return;
+    // Once grasp is locked, do not continue squeezing the jaws.
+    if (graspJoint) {
+        startLiftAfterGrip(cubeItem);
+        return;
+    }
+    cubeItem.body.wakeUp();
+    const candidate = pickJawContactCandidate([cubeItem]);
+    if (candidate) {
+        if (!graspJoint) {
+            createGraspJointForCube(toolBody, candidate);
+        }
+        if (graspJoint) {
+            startLiftAfterGrip(cubeItem);
+        }
+        return;
+    }
+
+    const openRatio = actuator.getOpenRatio();
+    if (openRatio <= 0) {
+        clearPickLerp();
+        pickSequence = null;
+        renderControl.requestRender();
+        return;
+    }
+
+    const gripStep = Math.max(0.002, pickParams.gripCloseStep);
+    actuator.setOpenRatio(Math.max(0, openRatio - gripStep));
+    queueSolveFromTarget();
+    renderControl.requestRender();
+}
+
+function runManualGripStep() {
+    clearPickLerp();
+    pickSequence = null;
+    if (!actuator) return false;
+    // Anti-penetration guard:
+    // after grasp is established, keep current jaw opening and ignore further close commands.
+    if (graspJoint && graspedCube) {
+        return false;
+    }
+    const toolBody = actuator.getPhysicsBody();
+    const candidate = pickJawContactCandidate(physicsCubes);
+    if (candidate && toolBody && !graspJoint) {
+        createGraspJointForCube(toolBody, candidate);
+        return true;
+    }
+    if (!candidate) {
+        const step = Math.max(0.002, pickParams.gripCloseStep);
+        const nextRatio = Math.max(0, actuator.getOpenRatio() - step);
+        actuator.setOpenRatio(nextRatio);
+        return true;
+    }
+    return false;
+}
+
 function clearPickLerp() {
     // Clearing this resets any in-flight interpolation/wait transition.
     stageLerp = null;
     stageTask = null;
-}
-
-function releaseGrabbedCube() {
-    if (!grabbedCube?.body) return;
-    grabbedCube.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
-    grabbedCube = null;
-}
-
-function syncGraspProbePose() {
-    if (!graspProbeBody || !actuator) return;
-    actuator.getGripWorldPosition(tmpGripWorldPos);
-    graspProbeBody.setNextKinematicTranslation({
-        x: tmpGripWorldPos.x,
-        y: tmpGripWorldPos.y,
-        z: tmpGripWorldPos.z,
-    });
-}
-
-function syncGrabbedCubeWithGrip() {
-    if (!grabbedCube?.body || !actuator) return;
-    actuator.getGripWorldPosition(tmpGripWorldPos);
-    actuator.getGripWorldQuaternion(tmpGripWorldQuat);
-    grabbedCube.body.setNextKinematicTranslation({
-        x: tmpGripWorldPos.x,
-        y: tmpGripWorldPos.y,
-        z: tmpGripWorldPos.z,
-    });
-    grabbedCube.body.setNextKinematicRotation({
-        x: tmpGripWorldQuat.x,
-        y: tmpGripWorldQuat.y,
-        z: tmpGripWorldQuat.z,
-        w: tmpGripWorldQuat.w,
-    });
-}
-
-function tryGrabCubeAtGrip() {
-    if (!physicsWorld || !graspProbeCollider) return null;
-    let candidate = null;
-    let bestDist2 = Infinity;
-    actuator?.getGripWorldPosition(tmpGripWorldPos);
-
-    for (const item of physicsCubes) {
-        if (!item?.collider || !item?.body || item === grabbedCube) continue;
-        let intersected = false;
-        if (typeof physicsWorld.intersectionPair === 'function') {
-            intersected = physicsWorld.intersectionPair(graspProbeCollider, item.collider) === true;
-        }
-        if (!intersected && typeof physicsWorld.contactPair === 'function') {
-            let hasContact = false;
-            physicsWorld.contactPair(graspProbeCollider, item.collider, () => {
-                hasContact = true;
-            });
-            intersected = hasContact;
-        }
-        if (!intersected) continue;
-
-        const p = item.body.translation();
-        const dx = p.x - tmpGripWorldPos.x;
-        const dy = p.y - tmpGripWorldPos.y;
-        const dz = p.z - tmpGripWorldPos.z;
-        const d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 < bestDist2) {
-            bestDist2 = d2;
-            candidate = item;
-        }
-    }
-
-    if (!candidate) return null;
-    grabbedCube = candidate;
-    grabbedCube.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
-    syncGrabbedCubeWithGrip();
-    return grabbedCube;
 }
 
 function computePickTargetFromCube(cubeItem, hover, outPos, outQuat) {
@@ -737,7 +1041,7 @@ function startNextStageStep(lastStep = null) {
     let nextState;
     try {
         nextState = stageTask.iterator.next(lastStep);
-    } catch (_error) {
+    } catch {
         stageTask = null;
         stageLerp = null;
         return false;
@@ -837,8 +1141,17 @@ function getOpenStageHover(cubeItem) {
     return Math.max(0, cubeSize * 1.5);
 }
 
+function getDescendStageHover(cubeItem) {
+    const cubeSize = Number.isFinite(cubeItem?.size) ? cubeItem.size : pickParams.cubeSize;
+    return -Math.min(Math.max(cubeSize * 0.9 + 0.012, 0.018), 0.05);
+}
+
 function startPickSequence(cubeItem) {
     if (!cubeItem || !ikTarget) return;
+    if (graspJoint) {
+        console.warn('[IK Pick] Gripper is holding an object. Click Drop to release first.');
+        return;
+    }
     clearPickLerp();
     pickSequence = { cube: cubeItem, stage: 'approachFlow' };
     const ok = computePickTargetFromCube(cubeItem, getOpenStageHover(cubeItem), tmpLerpTargetPos, tmpLerpTargetQuat);
@@ -945,9 +1258,10 @@ function advancePickSequence() {
                 solveWhileLerping: false,
             };
             if (!pickSequence || pickSequence.stage !== 'approachFlow') return;
-            const ok = computePickTargetFromCube(cubeItem, PICK_DESCEND_HOVER, tmpLerpTargetPos, tmpLerpTargetQuat);
+            const ok = computePickTargetFromCube(cubeItem, getDescendStageHover(cubeItem), tmpLerpTargetPos, tmpLerpTargetQuat);
             if (!ok) {
                 pickSequence.stage = 'descend';
+                pickSequence.descendStartedMs = performance.now();
                 queueSolveFromTarget();
                 return;
             }
@@ -960,6 +1274,7 @@ function advancePickSequence() {
             };
             if (!pickSequence || pickSequence.stage !== 'approachFlow') return;
             pickSequence.stage = 'descend';
+            pickSequence.descendStartedMs = performance.now();
             queueSolveFromTarget();
             renderControl.requestRender();
         });
@@ -967,31 +1282,12 @@ function advancePickSequence() {
     }
 
     if (pickSequence.stage === 'descend') {
-        syncGraspProbePose();
-        if (!grabbedCube) {
-            tryGrabCubeAtGrip();
-        }
-        actuator?.close();
-        const ok = computePickTargetFromCube(cubeItem, pickParams.graspHover, tmpLerpTargetPos, tmpLerpTargetQuat);
-        if (!ok) {
-            pickSequence.stage = 'lift';
-            queueSolveFromTarget();
-            return;
-        }
-        pickSequence.stage = 'liftFlow';
-        startStageTask(function* () {
-            yield {
-                name: 'liftLerp',
-                position: () => tmpLerpTargetPos,
-                quaternion: () => tmpLerpTargetQuat,
-                duration: pickParams.liftDurationMs,
-                solveWhileLerping: true,
-            };
-            if (!pickSequence || pickSequence.stage !== 'liftFlow') return;
-            pickSequence.stage = 'lift';
-            queueSolveFromTarget();
-        });
+        pickSequence.stage = 'gripFlow';
         renderControl.requestRender();
+        return;
+    }
+
+    if (pickSequence.stage === 'gripFlow') {
         return;
     }
 
@@ -1034,7 +1330,6 @@ function advancePickSequence() {
                 solveWhileLerping: false,
             };
             if (!pickSequence || pickSequence.stage !== 'dropFlow') return;
-            releaseGrabbedCube();
             actuator?.open();
             clearPickLerp();
             pickSequence = null;
@@ -1071,9 +1366,27 @@ function onScenePickClick(event) {
 
 function stepPhysics() {
     if (!physicsReady || !physicsWorld) return false;
-    syncGraspProbePose();
-    syncGrabbedCubeWithGrip();
+    actuator?.syncPhysics?.();
+    if (graspJoint && graspedCube?.body) {
+        graspedCube.body.wakeUp();
+    }
     physicsWorld.step();
+    if (graspJoint && actuator && graspedCube) {
+        const jawGap = actuator.getJawInnerGap();
+        const cubeSize = Number.isFinite(graspedCube.size) ? graspedCube.size : pickParams.cubeSize;
+        const isOpening = Number.isFinite(prevJawInnerGap) && jawGap > (prevJawInnerGap + JAW_GAP_OPEN_EPS);
+        if (jawGap >= cubeSize && isOpening) {
+            releaseGraspJoint();
+        }
+    }
+    if (graspJoint && !graspedCube?.mesh?.parent) {
+        releaseGraspJoint();
+    }
+    updateGripFlow();
+    if (isGripButtonHeld) {
+        runManualGripStep();
+    }
+    prevJawInnerGap = actuator ? actuator.getJawInnerGap() : null;
 
     let hasActiveBody = false;
     for (const item of physicsCubes) {
@@ -1100,6 +1413,7 @@ function syncTargetFromActuator() {
 function buildKuka() {
     qCurrent = kukaKr5.map((segment) => THREE.MathUtils.degToRad(Number.isFinite(segment.theta) ? segment.theta : 0));
     applyQToChain(qCurrent, { syncToolEuler: true, syncReachRange: true });
+    releaseGraspJoint();
     actuator?.open();
     syncTargetFromActuator();
     renderControl.requestRender();
@@ -1205,7 +1519,21 @@ function solveIfPending() {
     }
 
     const remainingError = chainSolver.computeSolveErrorNorm(qCurrent);
-    if (remainingError > targetTolerance) {
+    const remainingPosError = chainSolver.computePositionError(qCurrent).length();
+    const stagePosTolerance = pickSequence?.stage === 'descend'
+        ? Math.min(targetTolerance, DESCEND_STAGE_TOLERANCE)
+        : Math.max(targetTolerance, PICK_STAGE_POSITION_TOLERANCE);
+    const descendContactReady = pickSequence?.stage === 'descend'
+        && pickSequence?.cube
+        && pickJawContactCandidate([pickSequence.cube]) !== null;
+    const descendTimedOut = pickSequence?.stage === 'descend'
+        && Number.isFinite(pickSequence?.descendStartedMs)
+        && (performance.now() - pickSequence.descendStartedMs) >= DESCEND_STAGE_TIMEOUT_MS;
+    const converged = pickSequence
+        ? (remainingPosError <= stagePosTolerance || descendContactReady || descendTimedOut)
+        : remainingError <= targetTolerance;
+
+    if (!converged) {
         solveActive = true;
         pendingSolve = true;
     } else {
@@ -1232,6 +1560,8 @@ function resetAll() {
     if (actuator?.object) {
         actuator.object.rotation.set(0, 0, 0);
     }
+    isGripButtonHeld = false;
+    releaseGraspJoint();
     actuatorParams.toolEuler.x = 0;
     actuatorParams.toolEuler.y = -90;
     actuatorParams.toolEuler.z = 0;
@@ -1249,12 +1579,13 @@ function onResize() {
 }
 
 function renderFrame() {
-    const physicsActive = stepPhysics();
-    updateReachRangePose();
     const lerping = updateStageLerp();
     solveIfPending();
+    const physicsActive = stepPhysics();
+    updateReachRangePose();
+    updatePhysicsDebugLines();
     renderer.render(scene, camera);
-    if (pendingSolve || solveActive || isSolving || physicsActive || lerping || stageLerp) {
+    if (pendingSolve || solveActive || isSolving || physicsActive || lerping || stageLerp || isGripButtonHeld) {
         renderControl.requestRender();
     }
 }
