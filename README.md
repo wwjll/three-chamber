@@ -1,6 +1,6 @@
 # three-chamber
 
-A repository of creative and practical experiments using Three.js
+A repository of creative and practical experiments using Three.js.
 
 # How to run
 
@@ -17,11 +17,13 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
 # Featured Projects
 
+## Kinematic and Robotic
+
 -   **IK Pick**
 
     Pick-and-place robotic arm demo with IK, staged motion, and physics-based cube grasp/release.
 
-    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/ikPick.html)
+    [Preview](https://wwjll.github.io/three-chamber/ikPick.html)
 
     ![IK Pick](./assets/docs/IKPick.png)
 
@@ -31,7 +33,7 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
     Math principle: use task error $e=[e_p,e_r]$, where $e_p=p_t-p(q)$ and $e_r$ is orientation error from quaternion difference.  
     For revolute joint $i$, Jacobian columns are $J_{v,i}=a_i \times (p-p_i)$ and $J_{w,i}=a_i$, then update with gradient step $\Delta q=\alpha J^T e$.
 
-    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/ik.html)
+    [Preview](https://wwjll.github.io/three-chamber/ik.html)
 
     ![Simple IK](./assets/docs/SimpleIK.png)
 
@@ -42,46 +44,54 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
     In MDH mode, I add an extra parameter set so there is an end joint for consistency.  
     I started using Codex for this example.  
 
-    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/dhLinks.html)
+    [Preview](https://wwjll.github.io/three-chamber/dhLinks.html)
 
     ![DH Links](./assets/docs/DHLinks.png)
 
--   **Path-Tracing**
-
-    Simple path-tracing demo built on Three.js.
-
-    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/pathTracing.html)
-
-    ![PathTracing](./assets/docs/PathTracing.png)
-
--   **Dissolve**
-
-    Custom dissolve shader driven by Three.js onBeforeCompile for art-directed fades
-
-    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/dissolve.html)
-
-    ![Dissolve](./assets/docs/Dissolve.gif)
+## Editors
 
 -   **Camera Editor**
 
     Spline-based camera animation editor for smooth, programmable shots
 
-    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/cameraEditor.html)
+    [Preview](https://wwjll.github.io/three-chamber/cameraEditor.html)
 
-    ![CameraEditor](./assets/docs/CameraEditor.gif)
+    ![CameraEditor](./assets/docs/CameraEditor.png)
+
+# Rendering
+
+-   **Path-Tracing**
+
+    Simple path-tracing demo built on Three.js.
+
+    [Preview](https://wwjll.github.io/three-chamber/pathTracing.html)
+
+    ![PathTracing](./assets/docs/PathTracing.png)
+
+# Animation
 
 -   **TowerMotion**
 
     Lightweight BIM building animation controller with timeline-friendly motion
 
-    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/towerMotion.html)
+    [Preview](https://wwjll.github.io/three-chamber/towerMotion.html)
 
     ![TowerMotion](./assets/docs/TowerMotion.gif)
+    
+# Visual Effects
+
+-   **Dissolve**
+
+    Custom dissolve shader driven by Three.js onBeforeCompile for art-directed fades
+
+    [Preview](https://wwjll.github.io/three-chamber/dissolve.html)
+
+    ![Dissolve](./assets/docs/Dissolve.gif)
 
 -   **HeightWarp**
 
     Heightmap-driven distortion effect using custom shader passes
 
-    [Preview](https://wwjll.github.io/three-chamber/examples/bundle/heightWarp.html)
+    [Preview](https://wwjll.github.io/three-chamber/heightWarp.html)
 
     ![HeightWarp](./assets/docs/HeightWarp.gif)

@@ -14,9 +14,9 @@ importers:
       '@tweenjs/tween.js':
         specifier: 21.1.1
         version: 21.1.1
-      gl-matrix:
-        specifier: ^3.4.3
-        version: 3.4.3
+      marked:
+        specifier: ^16.3.0
+        version: 16.4.2
       parcel:
         specifier: ^2.14.0
         version: 2.14.0(@swc/helpers@0.5.15)
@@ -894,9 +894,6 @@ packages:
     resolution: {integrity: sha512-sTSfBjoXBp89JvIKIefqw7U2CCebsc74kiY6awiGogKtoSGbgjYE/G/+l9sF3MWFPNc9IcoOC4ODfKHfxFmp0g==}
     engines: {node: '>= 0.4'}
 
-  gl-matrix@3.4.3:
-    resolution: {integrity: sha512-wcCp8vu8FT22BnvKVPjXa/ICBWRq/zjFfdofZy1WSpQZpphblv12/bOQLBC1rMM7SGOFS9ltVmKOHil5+Ml7gA==}
-
   glob-parent@6.0.2:
     resolution: {integrity: sha512-XxwI8EOhVQgWp6iDL+3b0r86f4d6AX6zSU55HfB4ydCEuXLXc5FcYeOu+nnGftS4TEju/11rt4KJPTMgbfmv4A==}
     engines: {node: '>=10.13.0'}
@@ -1133,6 +1130,11 @@ packages:
 
   lodash.merge@4.6.2:
     resolution: {integrity: sha512-0KpjqXRVvrYyCsX1swR/XTK0va6VQkQM6MNo7PqW77ByjAhoARA8EfrP1N4+KlKj8YS0ZUCtRT/YUuhyYDujIQ==}
+
+  marked@16.4.2:
+    resolution: {integrity: sha512-TI3V8YYWvkVf3KJe1dRkpnjs68JUPyEa5vjKrp1XEEJUAOaQc+Qj+L1qWbPd0SJuAdQkFU0h73sXXqwDYxsiDA==}
+    engines: {node: '>= 20'}
+    hasBin: true
 
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
@@ -2543,8 +2545,6 @@ snapshots:
       dunder-proto: 1.0.1
       es-object-atoms: 1.1.1
 
-  gl-matrix@3.4.3: {}
-
   glob-parent@6.0.2:
     dependencies:
       is-glob: 4.0.3
@@ -2747,6 +2747,8 @@ snapshots:
       p-locate: 5.0.0
 
   lodash.merge@4.6.2: {}
+
+  marked@16.4.2: {}
 
   math-intrinsics@1.1.0: {}
 

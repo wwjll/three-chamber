@@ -4,8 +4,8 @@
   "description": "A lib contains practical use cases using three.js and relative.",
   "scripts": {
     "build-examples": "cd examples && parcel build ./*.html --dist-dir ./bundle/ --public-url . --no-cache --no-content-hash",
-    "build-single-examples": "cd examples && parcel build ./xxx.html --dist-dir ./bundle/ --public-url . --no-cache --no-content-hash --no-optimize ",
     "start": "sh -c '(cd assets && http-server -p 2000 --cors) & (cd examples && parcel serve ./*.html --dist-dir ./dev-bundle/ --no-cache)'",
+    "build-pages": "pnpm run build-examples && node extend/publish/buildPages.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
@@ -14,7 +14,7 @@
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",
     "@tweenjs/tween.js": "21.1.1",
-    "gl-matrix": "^3.4.3",
+    "marked": "^16.3.0",
     "parcel": "^2.14.0",
     "three": "^0.160.0",
     "tweakpane": "^4.0.5"
