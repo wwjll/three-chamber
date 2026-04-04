@@ -36,14 +36,30 @@ export const Hit =  /* glsl */`
         float t, u, v;
         if(hitTriangle_MT97(ray, tri.p1, tri.p2, tri.p3, t, u, v)) {
         if(t > 0.0 && t < hit.distance) {
+            float w = 1.0 - u - v;
+            vec3 edge1 = tri.p2 - tri.p1;
+            vec3 edge2 = tri.p3 - tri.p1;
+            vec2 deltaUV1 = tri.uv2 - tri.uv1;
+            vec2 deltaUV2 = tri.uv3 - tri.uv1;
+            float uvDeterminant = deltaUV1.x * deltaUV2.y - deltaUV1.y * deltaUV2.x;
+
             hit.isHit = true;
             hit.distance = t;
             hit.position = ray.origin + t * ray.direction;
-            // caculate the normal for each indivial triangle
-            // hit.normal = normalize(cross(tri.p2 - tri.p1, tri.p3 - tri.p2));
-            // use the origin normal of vertex to get a somooth transition
-            hit.normal = ((tri.n1 + tri.n2 + tri.n3) / 3.0);
+            hit.normal = normalize(tri.n1 * w + tri.n2 * u + tri.n3 * v);
+            hit.uv = tri.uv1 * w + tri.uv2 * u + tri.uv3 * v;
             hit.rayDirec = ray.direction;
+
+            if(abs(uvDeterminant) > EPSILON) {
+                float inverseDeterminant = 1.0 / uvDeterminant;
+                vec3 tangent = (edge1 * deltaUV2.y - edge2 * deltaUV1.y) * inverseDeterminant;
+                tangent = normalize(tangent - hit.normal * dot(hit.normal, tangent));
+                hit.tangent = tangent;
+                hit.bitangent = normalize(cross(hit.normal, tangent)) * sign(uvDeterminant);
+            } else {
+                getTangent(hit.normal, hit.tangent, hit.bitangent);
+            }
+
             if(dot(hit.normal, hit.rayDirec) > 0.0) {
             hit.isInside = true;
             }

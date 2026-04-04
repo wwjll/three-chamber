@@ -2,6 +2,7 @@ export const Struct =  /* glsl */`
     struct Triangle {
         vec3 p1, p2, p3;
         vec3 n1, n2, n3;
+        vec2 uv1, uv2, uv3;
     };
 
     struct Material {
@@ -32,6 +33,9 @@ export const Struct =  /* glsl */`
         float distance;
         vec3 position;
         vec3 normal;
+        vec3 tangent;
+        vec3 bitangent;
+        vec2 uv;
         vec3 rayDirec;
         Material material;
     };

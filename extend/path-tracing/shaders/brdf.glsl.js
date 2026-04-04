@@ -34,6 +34,48 @@ export const Brdf =  /* glsl */`
         return 1.0 / (NdotV + sqrt(sqr(VdotX * ax) + sqr(VdotY * ay) + sqr(NdotV)));
     }
 
+    float luminance(vec3 color) {
+        return dot(color, vec3(0.2126, 0.7152, 0.0722));
+    }
+
+    vec3 BRDF_F0(in Material material) {
+        vec3 baseColor = material.baseColor;
+        float baseLuminance = 0.3 * baseColor.r + 0.6 * baseColor.g + 0.1 * baseColor.b;
+        vec3 tint = (baseLuminance > 0.0) ? (baseColor / baseLuminance) : vec3(1.0);
+        vec3 specularColor = material.specular * mix(vec3(1.0), tint, material.specularTint);
+        return mix(0.08 * specularColor, baseColor, material.metallic);
+    }
+
+    float DiffusePDF(vec3 N, vec3 L) {
+        return max(dot(N, L), 0.0) * ONE_OVER_PI;
+    }
+
+    float SpecularPDF(vec3 V, vec3 N, vec3 L, in Material material) {
+        float NdotL = max(dot(N, L), 0.0);
+        float NdotV = max(dot(N, V), 0.0);
+        if(NdotL <= 0.0 || NdotV <= 0.0) {
+            return 0.0;
+        }
+
+        vec3 H = normalize(V + L);
+        float NdotH = max(dot(N, H), 0.0);
+        float LdotH = max(dot(L, H), 0.0);
+        if(NdotH <= 0.0 || LdotH <= 0.0) {
+            return 0.0;
+        }
+
+        float alpha = max(material.roughness * material.roughness, 0.001);
+        float distribution = GTR2(NdotH, alpha);
+        return distribution * NdotH / max(4.0 * LdotH, EPSILON);
+    }
+
+    float BRDFSpecularSampleWeight(in Material material) {
+        vec3 f0 = BRDF_F0(material);
+        float diffuseWeight = (1.0 - material.metallic) * max(luminance(material.baseColor), 0.001);
+        float specularWeight = max(luminance(f0), 0.001);
+        return clamp(specularWeight / (diffuseWeight + specularWeight), 0.05, 0.95);
+    }
+
     vec3 BRDF_Evaluate(vec3 V, vec3 N, vec3 L, vec3 X, vec3 Y, in Material material) {
 
         float NdotL = dot(N, L);

@@ -40,9 +40,9 @@
  *   constraint-vs-contact fighting during carry.
  */
 import * as THREE from 'three';
+import * as RAPIER from '@dimforge/rapier3d-compat';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import * as RAPIER from '@dimforge/rapier3d-compat';
 import { Pane } from 'tweakpane';
 import { getAssetURL, getRenderLoopController } from '../extend/tools/Tool.js';
 import { Chain } from '../extend/kinematic/Chain.js';

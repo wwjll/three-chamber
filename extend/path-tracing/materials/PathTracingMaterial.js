@@ -7,8 +7,8 @@ import { Utils } from '../shaders/utils.glsl'
 import { Rand } from '../shaders/rand.glsl'
 import { Ray } from '../shaders/ray.glsl'
 import { Hit } from '../shaders/hit.glsl'
-import { Sample } from '../shaders/sample.glsl'
 import { Brdf } from '../shaders/brdf.glsl'
+import { Sample } from '../shaders/sample.glsl'
 import { Common } from '../shaders/common.glsl'
 
 export class PathTracingMaterial extends MaterialBase {
@@ -33,7 +33,27 @@ export class PathTracingMaterial extends MaterialBase {
                 triangleDataTextureSize: { type: "v2", value: null },
                 bvhNodeDataTexture: { type: "t", value: null },
                 bvhNodeDataTextureSize: { type: "v2", value: null },
-                copyTexture: { type: "t", value: null },
+                outTexture: { type: "t", value: null },
+                albedoTexture: { type: "t", value: null },
+                normalTexture: { type: "t", value: null },
+                roughnessTexture: { type: "t", value: null },
+                metalnessTexture: { type: "t", value: null },
+                aoTexture: { type: "t", value: null },
+                emissiveTexture: { type: "t", value: null },
+                useAlbedoTexture: { type: "i", value: 0 },
+                useNormalTexture: { type: "i", value: 0 },
+                useRoughnessTexture: { type: "i", value: 0 },
+                useMetalnessTexture: { type: "i", value: 0 },
+                useAoTexture: { type: "i", value: 0 },
+                useEmissiveTexture: { type: "i", value: 0 },
+                baseColorFactor: { type: "v3", value: null },
+                roughnessFactor: { type: "f", value: 1.0 },
+                metalnessFactor: { type: "f", value: 0.0 },
+                emissiveFactor: { type: "v3", value: null },
+                normalScale: { type: "v2", value: null },
+                aoIntensity: { type: "f", value: 1.0 },
+                materialPreset: { type: "i", value: 0 },
+                debugMode: { type: "i", value: 0 },
                 hdrTexture: { type: "t", value: null },
             },
 
@@ -67,7 +87,27 @@ export class PathTracingMaterial extends MaterialBase {
                 uniform sampler2D hdrTexture;
                 uniform sampler2D triangleDataTexture;
                 uniform sampler2D bvhNodeDataTexture;
-                uniform sampler2D copyTexture;
+                uniform sampler2D outTexture;
+                uniform sampler2D albedoTexture;
+                uniform sampler2D normalTexture;
+                uniform sampler2D roughnessTexture;
+                uniform sampler2D metalnessTexture;
+                uniform sampler2D aoTexture;
+                uniform sampler2D emissiveTexture;
+                uniform int useAlbedoTexture;
+                uniform int useNormalTexture;
+                uniform int useRoughnessTexture;
+                uniform int useMetalnessTexture;
+                uniform int useAoTexture;
+                uniform int useEmissiveTexture;
+                uniform vec3 baseColorFactor;
+                uniform float roughnessFactor;
+                uniform float metalnessFactor;
+                uniform vec3 emissiveFactor;
+                uniform vec2 normalScale;
+                uniform float aoIntensity;
+                uniform int materialPreset;
+                uniform int debugMode;
 
                 uniform float texelsPerTriangle;
                 uniform float texelsPerBVHNode;
@@ -83,8 +123,8 @@ export class PathTracingMaterial extends MaterialBase {
                 ${Rand}
                 ${Ray}
                 ${Hit}
-                ${Sample}
                 ${Brdf}
+                ${Sample}
                 ${Common}
             `
         })

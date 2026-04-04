@@ -8,7 +8,7 @@ import { getAssetURL } from '/extend/tools/Tool.js';
 import { TrackEditor } from '/extend/editor/TrackEditor.js';
 
 const assetUrl = getAssetURL();
-const modelUrl = assetUrl + 'models/collision-world.glb';
+const modelUrl = assetUrl + 'models/scenes/collision-world.glb';
 const points = [
     new THREE.Vector3(13.66, 14.28, -7.66),
     new THREE.Vector3(0.99, 5.25, 3.95),

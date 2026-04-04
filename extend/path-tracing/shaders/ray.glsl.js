@@ -14,8 +14,17 @@ export const Ray =  /* glsl */`
         hit.distance = INFINITY;
         hit.position = vec3(INFINITY);
         hit.normal = vec3(0.0);
+        hit.tangent = vec3(1.0, 0.0, 0.0);
+        hit.bitangent = vec3(0.0, 1.0, 0.0);
+        hit.uv = vec2(0.0);
         hit.rayDirec = vec3(0.0);
-        hit.material = Gold();
+        if (materialPreset == 1) {
+            hit.material = Gold();
+        } else if (materialPreset == 2) {
+            hit.material = Mirror();
+        } else {
+            hit.material = DebugAlbedo();
+        }
         return hit;
     }
 

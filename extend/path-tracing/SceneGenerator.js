@@ -464,11 +464,13 @@ export class SceneGenerator {
     }
 
     generate() {
+        this.model.updateWorldMatrix(true, true);
 
         this.model.traverse(child => {
             if (child.isMesh) {
-                child.geometry.applyMatrix4(child.matrix);
-                this.geometries.push(child.geometry);
+                const geometry = child.geometry.clone();
+                geometry.applyMatrix4(child.matrixWorld);
+                this.geometries.push(geometry);
             }
         });
 
@@ -564,10 +566,9 @@ export class SceneGenerator {
             THREE.ClampToEdgeWrapping,
             THREE.NearestFilter,
             THREE.NearestFilter,
-            1,
-            THREE.LinearEncoding
-            // THREE.LinearSRGBColorSpace
+            1
         );
+        triangleDataTexture.colorSpace = THREE.NoColorSpace;
         triangleDataTexture.flipY = false;
         triangleDataTexture.generateMipmaps = false;
         triangleDataTexture.needsUpdate = true;
@@ -622,9 +623,9 @@ export class SceneGenerator {
             THREE.ClampToEdgeWrapping,
             THREE.NearestFilter,
             THREE.NearestFilter,
-            1,
-            THREE.LinearEncoding
+            1
         );
+        bvhDataTexture.colorSpace = THREE.NoColorSpace;
         bvhDataTexture.flipY = false;
         bvhDataTexture.generateMipmaps = false;
         bvhDataTexture.needsUpdate = true;

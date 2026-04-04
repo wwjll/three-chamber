@@ -46,9 +46,9 @@ export const Utils =  /* glsl */`
         vec3 n1 = texel2.yzw;
         vec3 n2 = texel3.xyz;
         vec3 n3 = vec3(texel3.w, texel4.xy);
-        // vec2 t1 = texel4.zw;
-        // vec2 t2 = texel5.xy;
-        // vec2 t3 = texel5.zw;
-        return Triangle(p1, p2, p3, n1, n2, n3);
+        vec2 t1 = texel4.zw;
+        vec2 t2 = texel5.xy;
+        vec2 t3 = texel5.zw;
+        return Triangle(p1, p2, p3, n1, n2, n3, t1, t2, t3);
     }
 `
