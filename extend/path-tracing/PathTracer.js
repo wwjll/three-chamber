@@ -6,6 +6,7 @@ import { PathTracingMaterial } from './materials/PathTracingMaterial'
 import {
     texelsPerTriangle,
     texelsPerBVHNode,
+    texelsPerMaterial,
 } from './Constants'
 
 
@@ -34,6 +35,189 @@ function* renderTask() {
         yield;
     }
 
+}
+
+function buildHdrImportanceDistribution(texture) {
+    const image = texture.image;
+    const width = image?.width || 0;
+    const height = image?.height || 0;
+    const data = image?.data;
+
+    if (!width || !height || !data) {
+        return null;
+    }
+
+    const conditionalData = new Float32Array(width * height * 4);
+    const marginalData = new Float32Array(height * 4);
+    const rowWeights = new Float32Array(height);
+    let totalWeight = 0;
+
+    for (let y = 0; y < height; y++) {
+        const theta = ((y + 0.5) / height) * Math.PI;
+        const sinTheta = Math.max(Math.sin(theta), 1e-6);
+        let rowSum = 0;
+
+        for (let x = 0; x < width; x++) {
+            const texelIndex = (y * width + x) * 4;
+            const r = Math.min(data[texelIndex], 10);
+            const g = Math.min(data[texelIndex + 1], 10);
+            const b = Math.min(data[texelIndex + 2], 10);
+            const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            rowSum += luminance * sinTheta;
+            conditionalData[(y * width + x) * 4] = rowSum;
+        }
+
+        rowWeights[y] = rowSum;
+        totalWeight += rowSum;
+
+        if (rowSum > 0) {
+            for (let x = 0; x < width; x++) {
+                conditionalData[(y * width + x) * 4] /= rowSum;
+            }
+        } else {
+            for (let x = 0; x < width; x++) {
+                conditionalData[(y * width + x) * 4] = (x + 1) / width;
+            }
+        }
+    }
+
+    let marginalCdf = 0;
+    for (let y = 0; y < height; y++) {
+        marginalCdf += rowWeights[y];
+        marginalData[y * 4] = totalWeight > 0 ? marginalCdf / totalWeight : (y + 1) / height;
+    }
+
+    const conditionalTexture = new THREE.DataTexture(
+        conditionalData,
+        width,
+        height,
+        THREE.RGBAFormat,
+        THREE.FloatType
+    );
+    conditionalTexture.colorSpace = THREE.NoColorSpace;
+    conditionalTexture.minFilter = THREE.NearestFilter;
+    conditionalTexture.magFilter = THREE.NearestFilter;
+    conditionalTexture.wrapS = THREE.ClampToEdgeWrapping;
+    conditionalTexture.wrapT = THREE.ClampToEdgeWrapping;
+    conditionalTexture.generateMipmaps = false;
+    conditionalTexture.needsUpdate = true;
+
+    const marginalTexture = new THREE.DataTexture(
+        marginalData,
+        height,
+        1,
+        THREE.RGBAFormat,
+        THREE.FloatType
+    );
+    marginalTexture.colorSpace = THREE.NoColorSpace;
+    marginalTexture.minFilter = THREE.NearestFilter;
+    marginalTexture.magFilter = THREE.NearestFilter;
+    marginalTexture.wrapS = THREE.ClampToEdgeWrapping;
+    marginalTexture.wrapT = THREE.ClampToEdgeWrapping;
+    marginalTexture.generateMipmaps = false;
+    marginalTexture.needsUpdate = true;
+
+    return {
+        conditionalTexture,
+        marginalTexture,
+        width,
+        height,
+        totalWeight,
+    };
+}
+
+function createFallbackLayer(rgba) {
+    return new Uint8Array(rgba);
+}
+
+function getTextureImageSize(texture) {
+    const image = texture?.image;
+    if (!image) {
+        return null;
+    }
+
+    if (Number.isFinite(image.width) && Number.isFinite(image.height)) {
+        return { width: image.width, height: image.height };
+    }
+
+    return null;
+}
+
+function extractTextureLayer(texture, width, height) {
+    const image = texture?.image;
+    if (!image) {
+        return null;
+    }
+
+    try {
+        const canvas = typeof OffscreenCanvas !== 'undefined'
+            ? new OffscreenCanvas(width, height)
+            : document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        context.clearRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+
+        const { data } = context.getImageData(0, 0, width, height);
+        return new Uint8Array(data.buffer.slice(0));
+    } catch (error) {
+        console.warn('[PathTracing] Failed to extract texture layer.', texture, error);
+        return null;
+    }
+}
+
+function buildTextureArray(textures, colorSpace, fallbackRgba) {
+    const validTextures = (textures || []).filter(Boolean);
+    const layers = validTextures.length;
+
+    if (layers === 0) {
+        const texture = new THREE.DataArrayTexture(createFallbackLayer(fallbackRgba), 1, 1, 1);
+        texture.format = THREE.RGBAFormat;
+        texture.type = THREE.UnsignedByteType;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.wrapS = THREE.ClampToEdgeWrapping;
+        texture.wrapT = THREE.ClampToEdgeWrapping;
+        texture.generateMipmaps = false;
+        texture.colorSpace = colorSpace;
+        texture.needsUpdate = true;
+        return texture;
+    }
+
+    let width = 1;
+    let height = 1;
+    validTextures.forEach((texture) => {
+        const size = getTextureImageSize(texture);
+        if (!size) {
+            return;
+        }
+        width = Math.max(width, size.width);
+        height = Math.max(height, size.height);
+    });
+
+    const layerSize = width * height * 4;
+    const data = new Uint8Array(layerSize * layers);
+
+    validTextures.forEach((texture, layerIndex) => {
+        const layerData = extractTextureLayer(texture, width, height);
+        if (!layerData) {
+            return;
+        }
+        data.set(layerData, layerIndex * layerSize);
+    });
+
+    const texture = new THREE.DataArrayTexture(data, width, height, layers);
+    texture.format = THREE.RGBAFormat;
+    texture.type = THREE.UnsignedByteType;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.generateMipmaps = false;
+    texture.colorSpace = colorSpace;
+    texture.needsUpdate = true;
+    return texture;
 }
 
 export class PathTracer {
@@ -68,6 +252,7 @@ export class PathTracer {
             new THREE.PlaneGeometry(2, 2),
             new PathTracingMaterial()
         );
+        this.pathTracingQuad.frustumCulled = false;
         this.outputQuad = new FullScreenQuad(new OutputMaterial());
 
         this.scene.add(this.pathTracingQuad);
@@ -77,6 +262,7 @@ export class PathTracer {
 
         this._setContants();
         this._setRenderTexture();
+        this._setSceneTextureArrays();
         this.setOriginMaterialInfo(null);
     }
 
@@ -84,6 +270,7 @@ export class PathTracer {
     _setContants() {
         this.pathTracingMaterial.texelsPerTriangle = texelsPerTriangle;
         this.pathTracingMaterial.texelsPerBVHNode = texelsPerBVHNode;
+        this.pathTracingMaterial.texelsPerMaterial = texelsPerMaterial;
     }
 
     // set full screen textures during rendering
@@ -92,9 +279,115 @@ export class PathTracer {
         this.outputMaterial.renderTexture = this.traceRenderTarget.texture;
     }
 
+    _setSceneTextureArrays() {
+        this.sceneTextureArrays = {
+            albedo: null,
+            normal: null,
+            metallicRoughness: null,
+            emissive: null,
+        };
+    }
+
+    _disposeSceneTextureArrays() {
+        Object.values(this.sceneTextureArrays).forEach((texture) => {
+            if (texture) {
+                texture.dispose();
+            }
+        });
+
+        this._setSceneTextureArrays();
+        this.pathTracingMaterial.sceneAlbedoTextureArray = null;
+        this.pathTracingMaterial.sceneNormalTextureArray = null;
+        this.pathTracingMaterial.sceneMetallicRoughnessTextureArray = null;
+        this.pathTracingMaterial.sceneEmissiveTextureArray = null;
+    }
+
+    _assignSceneTextureArray(key, textures, colorSpace, fallbackRgba) {
+        const textureArray = buildTextureArray(textures, colorSpace, fallbackRgba);
+        this.sceneTextureArrays[key] = textureArray;
+        return textureArray;
+    }
+
+    _setSceneMaterialTextureArrays(textures) {
+        this._disposeSceneTextureArrays();
+
+        this.pathTracingMaterial.sceneAlbedoTextureArray = this._assignSceneTextureArray(
+            'albedo',
+            textures?.albedo,
+            THREE.SRGBColorSpace,
+            [255, 255, 255, 255]
+        );
+        this.pathTracingMaterial.sceneNormalTextureArray = this._assignSceneTextureArray(
+            'normal',
+            textures?.normal,
+            THREE.NoColorSpace,
+            [128, 128, 255, 255]
+        );
+        this.pathTracingMaterial.sceneMetallicRoughnessTextureArray = this._assignSceneTextureArray(
+            'metallicRoughness',
+            textures?.metallicRoughness,
+            THREE.NoColorSpace,
+            [255, 255, 255, 255]
+        );
+        this.pathTracingMaterial.sceneEmissiveTextureArray = this._assignSceneTextureArray(
+            'emissive',
+            textures?.emissive,
+            THREE.SRGBColorSpace,
+            [255, 255, 255, 255]
+        );
+    }
+
+    _supportsTextureArrays() {
+        return this.renderer.capabilities.isWebGL2 === true;
+    }
+
     // set bounces
     setBounce(maxBounce) {
-        this.pathTracingMaterial.maxBounce = Math.min(maxBounce, 8);
+        this.pathTracingMaterial.maxBounce = Math.max(1, Math.min(maxBounce, 8));
+    }
+
+    setTransparentSteps(maxTransparentSteps) {
+        this.pathTracingMaterial.maxTransparentSteps = Math.max(1, Math.min(maxTransparentSteps, 8));
+    }
+
+    setEnvironmentMissMIS(enabled) {
+        const material = this.pathTracingMaterial;
+        const shouldEnable = enabled === true;
+        const isEnabled = material.defines?.ENABLE_ENV_MISS_MIS === 1;
+        if (shouldEnable === isEnabled) {
+            return;
+        }
+
+        if (shouldEnable) {
+            material.defines = {
+                ...material.defines,
+                ENABLE_ENV_MISS_MIS: 1,
+            };
+        } else if (material.defines) {
+            delete material.defines.ENABLE_ENV_MISS_MIS;
+        }
+
+        material.needsUpdate = true;
+    }
+
+    setDirectEnvironmentMIS(enabled) {
+        const material = this.pathTracingMaterial;
+        const shouldEnable = enabled === true;
+        const isEnabled = material.defines?.ENABLE_DIRECT_ENV_MIS === 1;
+        if (shouldEnable === isEnabled) {
+            return;
+        }
+
+        if (shouldEnable) {
+            material.defines = {
+                ...material.defines,
+                ENABLE_DIRECT_ENV_MIS: 1,
+            };
+        } else if (material.defines) {
+            delete material.defines.ENABLE_DIRECT_ENV_MIS;
+        }
+
+        material.needsUpdate = true;
     }
 
     // set hdr texture
@@ -103,55 +396,35 @@ export class PathTracer {
         texture.magFilter = THREE.LinearFilter;
         texture.generateMipmaps = false;
         this.pathTracingMaterial.hdrTexture = texture;
-    }
 
-    setAlbedoTexture(texture) {
-        if (!texture) {
-            this.pathTracingMaterial.albedoTexture = null;
-            this.pathTracingMaterial.useAlbedoTexture = 0;
+        if (this.hdrConditionalDistributionTexture) {
+            this.hdrConditionalDistributionTexture.dispose();
+            this.hdrConditionalDistributionTexture = null;
+        }
+        if (this.hdrMarginalDistributionTexture) {
+            this.hdrMarginalDistributionTexture.dispose();
+            this.hdrMarginalDistributionTexture = null;
+        }
+
+        const hdrDistribution = buildHdrImportanceDistribution(texture);
+        if (!hdrDistribution) {
+            this.pathTracingMaterial.hdrConditionalDistributionTexture = null;
+            this.pathTracingMaterial.hdrMarginalDistributionTexture = null;
+            this.pathTracingMaterial.hdrResolution = new THREE.Vector2(1, 1);
+            this.pathTracingMaterial.hdrTotalWeight = 0;
             return;
         }
-        texture.colorSpace = THREE.SRGBColorSpace;
-        this.pathTracingMaterial.albedoTexture = texture;
-        this.pathTracingMaterial.useAlbedoTexture = 1;
+
+        this.hdrConditionalDistributionTexture = hdrDistribution.conditionalTexture;
+        this.hdrMarginalDistributionTexture = hdrDistribution.marginalTexture;
+        this.pathTracingMaterial.hdrConditionalDistributionTexture = this.hdrConditionalDistributionTexture;
+        this.pathTracingMaterial.hdrMarginalDistributionTexture = this.hdrMarginalDistributionTexture;
+        this.pathTracingMaterial.hdrResolution = new THREE.Vector2(hdrDistribution.width, hdrDistribution.height);
+        this.pathTracingMaterial.hdrTotalWeight = hdrDistribution.totalWeight;
     }
 
     setOriginMaterialInfo(materialInfo) {
-        const pathTracingMaterial = this.pathTracingMaterial;
-        const configureTexture = (texture, colorSpace) => {
-            if (!texture) {
-                return null;
-            }
-            texture.colorSpace = colorSpace;
-            return texture;
-        };
-
-        const albedoTexture = configureTexture(materialInfo?.albedo || null, THREE.SRGBColorSpace);
-        const normalTexture = configureTexture(materialInfo?.normal || null, THREE.NoColorSpace);
-        const roughnessTexture = configureTexture(materialInfo?.roughness || null, THREE.NoColorSpace);
-        const metalnessTexture = configureTexture(materialInfo?.metalness || null, THREE.NoColorSpace);
-        const aoTexture = configureTexture(materialInfo?.ao || null, THREE.NoColorSpace);
-        const emissiveTexture = configureTexture(materialInfo?.emissive || null, THREE.SRGBColorSpace);
-
-        pathTracingMaterial.albedoTexture = albedoTexture;
-        pathTracingMaterial.useAlbedoTexture = albedoTexture ? 1 : 0;
-        pathTracingMaterial.normalTexture = normalTexture;
-        pathTracingMaterial.useNormalTexture = normalTexture ? 1 : 0;
-        pathTracingMaterial.roughnessTexture = roughnessTexture;
-        pathTracingMaterial.useRoughnessTexture = roughnessTexture ? 1 : 0;
-        pathTracingMaterial.metalnessTexture = metalnessTexture;
-        pathTracingMaterial.useMetalnessTexture = metalnessTexture ? 1 : 0;
-        pathTracingMaterial.aoTexture = aoTexture;
-        pathTracingMaterial.useAoTexture = aoTexture ? 1 : 0;
-        pathTracingMaterial.emissiveTexture = emissiveTexture;
-        pathTracingMaterial.useEmissiveTexture = emissiveTexture ? 1 : 0;
-
-        pathTracingMaterial.baseColorFactor = materialInfo?.baseColorFactor || new THREE.Vector3(1, 1, 1);
-        pathTracingMaterial.roughnessFactor = materialInfo?.roughnessFactor ?? 1.0;
-        pathTracingMaterial.metalnessFactor = materialInfo?.metalnessFactor ?? 0.0;
-        pathTracingMaterial.emissiveFactor = materialInfo?.emissiveFactor || new THREE.Vector3(0, 0, 0);
-        pathTracingMaterial.normalScale = materialInfo?.normalScale || new THREE.Vector2(1, 1);
-        pathTracingMaterial.aoIntensity = materialInfo?.aoIntensity ?? 1.0;
+        return materialInfo;
     }
 
     setDebugMode(mode) {
@@ -163,7 +436,7 @@ export class PathTracer {
     }
 
     // set Data texture
-    setDataTexture(triangle, bvh) {
+    setDataTexture(triangle, bvh, material) {
         const pathTracingMaterial = this.pathTracingQuad.material;
         pathTracingMaterial.triangleDataTexture = triangle.dataTexture;
         pathTracingMaterial.triangleDataTextureSize = {
@@ -176,6 +449,20 @@ export class PathTracer {
             x: bvh.textureWidth,
             y: bvh.textureHeight
         };
+
+        pathTracingMaterial.materialDataTexture = material.dataTexture;
+        pathTracingMaterial.materialDataTextureSize = {
+            x: material.textureWidth,
+            y: material.textureHeight
+        };
+
+        if (!this._supportsTextureArrays()) {
+            console.warn('[PathTracing] Texture arrays require WebGL2. Scene materials will fall back to factors only.');
+            this._disposeSceneTextureArrays();
+            return;
+        }
+
+        this._setSceneMaterialTextureArrays(material.textures);
     }
 
     setSize(width, height) {

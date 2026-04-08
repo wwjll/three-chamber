@@ -12,24 +12,22 @@ import { getAssetURL } from '/extend/tools/Tool.js'
 
 const assetUrl = getAssetURL();
 const modelAssetPaths = {
-    DamagedHelmet: 'models/pbr/DamagedHelmet.glb',
-    Bunny: 'models/static/bunny.glb',
-    Dragon: 'models/static/dragon.glb',
+    DamagedHelmet: 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/DamagedHelmet/glTF/DamagedHelmet.gltf',
+    FlightHelmet: 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/FlightHelmet/glTF/FlightHelmet.gltf',
+    SciFiHelmet: 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/SciFiHelmet/glTF/SciFiHelmet.gltf',
 };
 const modelOptions = {
     DamagedHelmet: 'DamagedHelmet',
-    Bunny: 'Bunny',
-    Dragon: 'Dragon',
+    FlightHelmet: 'FlightHelmet',
+    SciFiHelmet: 'SciFiHelmet',
 };
 const hdrAssetPaths = {
     KiaraNoon: 'hdrs/kiara_5_noon_2k.hdr',
     Daytime: 'hdrs/daytime.hdr',
-    NoonGrass: 'hdrs/noon_grass_2k.hdr',
 };
 const hdrOptions = {
     KiaraNoon: 'KiaraNoon',
     Daytime: 'Daytime',
-    NoonGrass: 'NoonGrass',
 };
 const info = document.querySelector("#info");
 
@@ -37,22 +35,44 @@ let renderer, scene, camera, controls, stats, clock, pane;
 let pathTracer;
 let currentModel = null;
 let loadGeneration = 0;
+let currentModelHasAlbedoTexture = false;
 const BG_COLOR = 0x333333;
 const sceneParams = {
     model: 'DamagedHelmet',
-    environment: 'KiaraNoon',
+    environment: 'Daytime',
 };
 const materialParams = {
-    material: 'origin',
+    material: 'off',
     debugMode: 'lit',
+    materialIndexing: 'off',
 };
-let currentModelTextureInfo = null;
+const renderParams = {
+    bounceCount: 2,
+    transparentSteps: 1,
+    renderScale: 1,
+};
+const samplingParams = {
+    environmentMissMIS: true,
+    directEnvironmentMIS: false,
+};
 const debugModeOptions = {
-    Lit: 'lit',
+    Off: 'lit',
     Albedo: 'albedo',
     UV: 'uv',
     'UV Fract': 'uvFract',
     Checker: 'checker',
+    Facing: 'facing',
+    'Geo Normal': 'geoNormal',
+    'Hose Mask': 'hoseMask',
+    'Hit Dist': 'hitDistance',
+};
+const materialIndexingOptions = {
+    Off: 'off',
+    'Material ID': 'materialId',
+    'Material Base': 'materialBase',
+    'Material Roughness': 'materialRoughness',
+    'Material Metalness': 'materialMetalness',
+    'Material Emissive': 'materialEmissive',
 };
 const debugModeValues = {
     lit: 0,
@@ -60,103 +80,43 @@ const debugModeValues = {
     uv: 2,
     uvFract: 3,
     checker: 4,
+    materialId: 5,
+    materialBase: 6,
+    materialRoughness: 7,
+    materialMetalness: 8,
+    materialEmissive: 9,
+    facing: 10,
+    geoNormal: 11,
+    hoseMask: 12,
+    hitDistance: 13,
 };
 const materialOptions = {
-    Origin: 'origin',
+    Off: 'off',
     Gold: 'gold',
     Mirror: 'mirror',
 };
 const materialPresetValues = {
-    origin: 0,
+    off: 0,
     gold: 1,
     mirror: 2,
 };
-
 let cameraMoving = false;
 
 init();
 
-function getTextureSummary(texture) {
-    if (!texture) return null;
-
-    const image = texture.image || {};
-    return {
-        name: texture.name || null,
-        uuid: texture.uuid,
-        source: image.currentSrc || image.src || image.data?.src || null,
-        size: Number.isFinite(image.width) && Number.isFinite(image.height)
-            ? `${image.width}x${image.height}`
-            : null,
-        colorSpace: texture.colorSpace || null,
-    };
-}
-
-function printModelTextures(model) {
-    const textureInfo = {
-        albedo: null,
-        normal: null,
-        roughness: null,
-        metalness: null,
-        ao: null,
-        emissive: null,
-        baseColorFactor: new THREE.Vector3(1, 1, 1),
-        roughnessFactor: 1.0,
-        metalnessFactor: 0.0,
-        emissiveFactor: new THREE.Vector3(0, 0, 0),
-        normalScale: new THREE.Vector2(1, 1),
-        aoIntensity: 1.0,
-    };
-    let materialFactorsCaptured = false;
+function modelHasAlbedoTexture(model) {
+    let hasAlbedoTexture = false;
 
     model.traverse((child) => {
-        if (!child.isMesh || !child.material) return;
+        if (hasAlbedoTexture || !child.isMesh || !child.material) {
+            return;
+        }
 
         const materials = Array.isArray(child.material) ? child.material : [child.material];
-        materials.forEach((material, index) => {
-            if (!textureInfo.albedo && material.map) textureInfo.albedo = material.map;
-            if (!textureInfo.normal && material.normalMap) textureInfo.normal = material.normalMap;
-            if (!textureInfo.roughness && material.roughnessMap) textureInfo.roughness = material.roughnessMap;
-            if (!textureInfo.metalness && material.metalnessMap) textureInfo.metalness = material.metalnessMap;
-            if (!textureInfo.ao && material.aoMap) textureInfo.ao = material.aoMap;
-            if (!textureInfo.emissive && material.emissiveMap) textureInfo.emissive = material.emissiveMap;
-            if (!materialFactorsCaptured) {
-                textureInfo.baseColorFactor.set(
-                    material.color?.r ?? 1,
-                    material.color?.g ?? 1,
-                    material.color?.b ?? 1,
-                );
-                textureInfo.roughnessFactor = material.roughness ?? 1.0;
-                textureInfo.metalnessFactor = material.metalness ?? 0.0;
-                textureInfo.emissiveFactor.set(
-                    (material.emissive?.r ?? 0) * (material.emissiveIntensity ?? 1.0),
-                    (material.emissive?.g ?? 0) * (material.emissiveIntensity ?? 1.0),
-                    (material.emissive?.b ?? 0) * (material.emissiveIntensity ?? 1.0),
-                );
-                textureInfo.normalScale.set(
-                    material.normalScale?.x ?? 1.0,
-                    material.normalScale?.y ?? 1.0,
-                );
-                textureInfo.aoIntensity = material.aoMapIntensity ?? 1.0;
-                materialFactorsCaptured = true;
-            }
-
-            const label = `${child.name || 'Mesh'}#${index}`;
-            console.group(`[PathTracing] Material textures: ${label}`);
-            console.log('material', {
-                name: material.name || null,
-                type: material.type,
-            });
-            console.log('map', getTextureSummary(material.map));
-            console.log('normalMap', getTextureSummary(material.normalMap));
-            console.log('roughnessMap', getTextureSummary(material.roughnessMap));
-            console.log('metalnessMap', getTextureSummary(material.metalnessMap));
-            console.log('aoMap', getTextureSummary(material.aoMap));
-            console.log('emissiveMap', getTextureSummary(material.emissiveMap));
-            console.groupEnd();
-        });
+        hasAlbedoTexture = materials.some((material) => Boolean(material?.map));
     });
 
-    return textureInfo;
+    return hasAlbedoTexture;
 }
 
 function fitCameraToObject(object3D) {
@@ -179,25 +139,40 @@ function fitCameraToObject(object3D) {
 }
 
 function applySelectedAlbedoTexture() {
-    const hasOriginAlbedo = Boolean(currentModelTextureInfo?.albedo);
+    const hasOriginAlbedo = currentModelHasAlbedoTexture;
 
-    if (materialParams.material === 'origin' && !hasOriginAlbedo) {
+    if (materialParams.material === 'off' && !hasOriginAlbedo) {
         materialParams.material = 'gold';
         pane?.refresh();
     }
 
-    const useOriginMaterial = materialParams.material === 'origin' && hasOriginAlbedo;
+    const useOriginMaterial = materialParams.material === 'off' && hasOriginAlbedo;
     const materialPreset = useOriginMaterial
-        ? materialPresetValues.origin
+        ? materialPresetValues.off
         : materialPresetValues[materialParams.material];
 
-    pathTracer.setOriginMaterialInfo(useOriginMaterial ? currentModelTextureInfo : null);
+    pathTracer.setOriginMaterialInfo(null);
     pathTracer.setMaterialPreset(materialPreset);
+}
+
+function applySelectedDebugMode() {
+    const modeKey = materialParams.materialIndexing !== 'off'
+        ? materialParams.materialIndexing
+        : materialParams.debugMode;
+    pathTracer.setDebugMode(debugModeValues[modeKey]);
+}
+
+function kickTraceFrame() {
+    cameraMoving = false;
+    pathTracer.reset();
+    pathTracer.update();
+    info.innerText = `Samples: ${pathTracer.samples}`;
 }
 
 async function loadSceneAssets() {
     const requestId = ++loadGeneration;
-    const modelUrl = assetUrl + modelAssetPaths[sceneParams.model];
+    const modelPath = modelAssetPaths[sceneParams.model];
+    const modelUrl = modelPath.startsWith('http') ? modelPath : assetUrl + modelPath;
     const envUrl = assetUrl + hdrAssetPaths[sceneParams.environment];
 
     const [envTexture, gltf] = await Promise.all([
@@ -214,18 +189,29 @@ async function loadSceneAssets() {
     }
 
     currentModel = gltf.scene;
-    currentModelTextureInfo = printModelTextures(currentModel);
+    currentModelHasAlbedoTexture = modelHasAlbedoTexture(currentModel);
     scene.add(currentModel);
     fitCameraToObject(currentModel);
 
     const sceneGenerator = new SceneGenerator(currentModel);
-    const { triangle, bvh } = sceneGenerator.generate();
+    const { triangle, bvh, material } = sceneGenerator.generate();
     currentModel.visible = false;
 
     pathTracer.setHdrTexture(envTexture);
-    pathTracer.setDataTexture(triangle, bvh);
+    pathTracer.setDataTexture(triangle, bvh, material);
     applySelectedAlbedoTexture();
-    pathTracer.reset();
+    applySelectedDebugMode();
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld(true);
+    controls.update();
+    kickTraceFrame();
+
+    requestAnimationFrame(() => {
+        if (requestId !== loadGeneration) {
+            return;
+        }
+        kickTraceFrame();
+    });
 }
 
 async function init() {
@@ -250,9 +236,12 @@ async function init() {
     document.body.appendChild(stats.dom);
 
     pathTracer = new PathTracer(renderer, scene, camera);
-    pathTracer.setSize(WIDTH, HEIGHT);
-    pathTracer.setBounce(3);
-    pathTracer.setDebugMode(debugModeValues[materialParams.debugMode]);
+    pathTracer.setSize(WIDTH * renderParams.renderScale, HEIGHT * renderParams.renderScale);
+    pathTracer.setBounce(renderParams.bounceCount);
+    pathTracer.setTransparentSteps(renderParams.transparentSteps);
+    pathTracer.setEnvironmentMissMIS(samplingParams.environmentMissMIS);
+    pathTracer.setDirectEnvironmentMIS(samplingParams.directEnvironmentMIS);
+    applySelectedDebugMode();
 
     initPane();
     await loadSceneAssets();
@@ -292,13 +281,66 @@ function initPane() {
             applySelectedAlbedoTexture();
             pathTracer.reset();
         });
-    materialFolder
+
+    const renderFolder = pane.addFolder({ title: 'Render' });
+    renderFolder
+        .addBinding(renderParams, 'bounceCount', {
+            label: 'Bounces',
+            min: 1,
+            max: 8,
+            step: 1,
+        })
+        .on('change', () => {
+            pathTracer.setBounce(renderParams.bounceCount);
+            pathTracer.reset();
+        });
+    renderFolder
+        .addBinding(renderParams, 'transparentSteps', {
+            label: 'Trans Steps',
+            min: 1,
+            max: 8,
+            step: 1,
+        })
+        .on('change', () => {
+            pathTracer.setTransparentSteps(renderParams.transparentSteps);
+            pathTracer.reset();
+        });
+
+    const samplingFolder = pane.addFolder({ title: 'Sampling' });
+    samplingFolder
+        .addBinding(samplingParams, 'environmentMissMIS', {
+            label: 'Env Miss MIS',
+        })
+        .on('change', () => {
+            pathTracer.setEnvironmentMissMIS(samplingParams.environmentMissMIS);
+            pathTracer.reset();
+        });
+    samplingFolder
+        .addBinding(samplingParams, 'directEnvironmentMIS', {
+            label: 'Env MIS',
+        })
+        .on('change', () => {
+            pathTracer.setDirectEnvironmentMIS(samplingParams.directEnvironmentMIS);
+            pathTracer.reset();
+        });
+
+    const debugFolder = pane.addFolder({ title: 'Debug' });
+    debugFolder
         .addBinding(materialParams, 'debugMode', {
-            label: 'Debug',
+            label: 'UV',
             options: debugModeOptions,
         })
         .on('change', () => {
-            pathTracer.setDebugMode(debugModeValues[materialParams.debugMode]);
+            applySelectedDebugMode();
+            pathTracer.reset();
+        });
+    debugFolder
+        .addBinding(materialParams, 'materialIndexing', {
+            label: 'Indexing',
+            options: materialIndexingOptions,
+        })
+        .on('change', () => {
+            applySelectedDebugMode();
             pathTracer.reset();
         });
 }
@@ -309,7 +351,7 @@ function event() {
         const { innerWidth, innerHeight } = window;
         pathTracer.camera.aspect = innerWidth / innerHeight;
         pathTracer.reset();
-        pathTracer.setSize(innerWidth, innerHeight);
+        pathTracer.setSize(innerWidth * renderParams.renderScale, innerHeight * renderParams.renderScale);
         pathTracer.update();
     });
 

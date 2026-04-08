@@ -16,6 +16,16 @@ export const Material =  /* glsl */`
         material.clearcoatGloss = 0.0;
         material.IOR = 0.0;
         material.transmission = 0.0;
+        material.albedoTextureIndex = -1.0;
+        material.normalTextureIndex = -1.0;
+        material.metallicRoughnessTextureIndex = -1.0;
+        material.aoTextureIndex = -1.0;
+        material.emissiveTextureIndex = -1.0;
+        material.normalScale = vec2(1.0);
+        material.aoIntensity = 1.0;
+        material.alpha = 1.0;
+        material.alphaMode = 0.0;
+        material.doubleSided = 0.0;
         return material;
     }
 
@@ -35,6 +45,16 @@ export const Material =  /* glsl */`
         material.clearcoatGloss = 0.0;
         material.IOR = 0.0;
         material.transmission = 0.0;
+        material.albedoTextureIndex = -1.0;
+        material.normalTextureIndex = -1.0;
+        material.metallicRoughnessTextureIndex = -1.0;
+        material.aoTextureIndex = -1.0;
+        material.emissiveTextureIndex = -1.0;
+        material.normalScale = vec2(1.0);
+        material.aoIntensity = 1.0;
+        material.alpha = 1.0;
+        material.alphaMode = 0.0;
+        material.doubleSided = 0.0;
         return material;
     }
 
@@ -54,6 +74,16 @@ export const Material =  /* glsl */`
         material.clearcoatGloss = 0.0;
         material.IOR = 1.5;
         material.transmission = 0.0;
+        material.albedoTextureIndex = -1.0;
+        material.normalTextureIndex = -1.0;
+        material.metallicRoughnessTextureIndex = -1.0;
+        material.aoTextureIndex = -1.0;
+        material.emissiveTextureIndex = -1.0;
+        material.normalScale = vec2(1.0);
+        material.aoIntensity = 1.0;
+        material.alpha = 1.0;
+        material.alphaMode = 0.0;
+        material.doubleSided = 0.0;
         return material;
     }
 `

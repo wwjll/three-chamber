@@ -19,7 +19,7 @@ const assetUrl = getAssetURL();
 const renderLoop = getRenderLoopController();
 const noiseTexture = assetUrl + 'textures/noise.png';
 const fireTexture = assetUrl + 'textures/fire.jpg';
-const modelUrl = assetUrl + 'models/animation/soldier.glb';
+const modelUrl = 'https://raw.githubusercontent.com/wwjll/three-chamber/master/assets/models/animation/soldier.glb';
 
 let camera, scene, renderer, controls, mixer;
 let stats, pane;

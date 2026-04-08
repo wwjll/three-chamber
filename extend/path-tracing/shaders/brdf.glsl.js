@@ -76,6 +76,19 @@ export const Brdf =  /* glsl */`
         return clamp(specularWeight / (diffuseWeight + specularWeight), 0.05, 0.95);
     }
 
+    float BRDFPDF(vec3 V, vec3 N, vec3 L, in Material material) {
+        float specularWeight = BRDFSpecularSampleWeight(material);
+        float diffusePdf = DiffusePDF(N, L);
+        float specularPdf = SpecularPDF(V, N, L, material);
+        return (1.0 - specularWeight) * diffusePdf + specularWeight * specularPdf;
+    }
+
+    float MISPowerWeight(float pdfA, float pdfB) {
+        float pdfASquared = pdfA * pdfA;
+        float pdfBSquared = pdfB * pdfB;
+        return pdfASquared / max(pdfASquared + pdfBSquared, EPSILON);
+    }
+
     vec3 BRDF_Evaluate(vec3 V, vec3 N, vec3 L, vec3 X, vec3 Y, in Material material) {
 
         float NdotL = dot(N, L);

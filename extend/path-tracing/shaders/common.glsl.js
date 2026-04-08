@@ -1,52 +1,216 @@
 export const Common =  /* glsl */`
     #define MAX_BOUNCE_LOOP 8
+    #define MAX_SAMPLE_CONTRIBUTION 10.0
+    #define MAX_THROUGHPUT_LUMINANCE 8.0
+    #define MAX_TRANSPARENT_SURFACE_STEPS 8
 
-    void applyOriginMaterial(inout RayHit hit) {
-        if(materialPreset != 0) {
-            return;
+    vec3 clampContribution(vec3 contribution, float maxLuminance) {
+        float contributionLuminance = luminance(contribution);
+        if(contributionLuminance <= maxLuminance) {
+            return contribution;
+        }
+        return contribution * (maxLuminance / max(contributionLuminance, EPSILON));
+    }
+
+    vec3 materialIdDebugColor(float materialIndex) {
+        float id = materialIndex + 1.0;
+        return fract(vec3(id * 0.37, id * 0.61, id * 0.83));
+    }
+
+    Material getSceneSurfaceMaterial(float materialIndex, vec2 uv, out vec3 baseColor, out float alpha) {
+        Material sceneMaterial = getSceneMaterial(materialIndex);
+        baseColor = sceneMaterial.baseColor;
+        alpha = sceneMaterial.alpha;
+
+        if(hasTextureIndex(sceneMaterial.albedoTextureIndex)) {
+            vec4 albedoSample = sampleSceneAlbedoTexture(sceneMaterial.albedoTextureIndex, uv);
+            baseColor *= albedoSample.rgb;
+            alpha *= albedoSample.a;
         }
 
-        hit.material.baseColor = baseColorFactor;
-        if(useAlbedoTexture == 1) {
-            hit.material.baseColor *= texture(albedoTexture, hit.uv).rgb;
-        }
+        return sceneMaterial;
+    }
 
-        hit.material.roughness = clamp(roughnessFactor, 0.02, 1.0);
-        if(useRoughnessTexture == 1) {
-            hit.material.roughness *= texture(roughnessTexture, hit.uv).g;
+    void applyResolvedSceneMaterial(inout RayHit hit, Material sceneMaterial, vec3 resolvedBaseColor, float resolvedAlpha) {
+        hit.material.alpha = resolvedAlpha;
+        hit.material.alphaMode = sceneMaterial.alphaMode;
+        hit.material.doubleSided = sceneMaterial.doubleSided;
+        hit.material.baseColor = resolvedBaseColor;
+
+        hit.material.roughness = clamp(sceneMaterial.roughness, 0.02, 1.0);
+        if(hasTextureIndex(sceneMaterial.metallicRoughnessTextureIndex)) {
+            hit.material.roughness *= sampleSceneMetallicRoughnessTexture(sceneMaterial.metallicRoughnessTextureIndex, hit.uv).g;
         }
         hit.material.roughness = clamp(hit.material.roughness, 0.02, 1.0);
 
-        hit.material.metallic = clamp(metalnessFactor, 0.0, 1.0);
-        if(useMetalnessTexture == 1) {
-            hit.material.metallic *= texture(metalnessTexture, hit.uv).b;
+        hit.material.metallic = clamp(sceneMaterial.metallic, 0.0, 1.0);
+        if(hasTextureIndex(sceneMaterial.metallicRoughnessTextureIndex)) {
+            hit.material.metallic *= sampleSceneMetallicRoughnessTexture(sceneMaterial.metallicRoughnessTextureIndex, hit.uv).b;
         }
         hit.material.metallic = clamp(hit.material.metallic, 0.0, 1.0);
 
-        hit.material.emissive = emissiveFactor;
-        if(useEmissiveTexture == 1) {
-            hit.material.emissive *= texture(emissiveTexture, hit.uv).rgb;
+        hit.material.emissive = sceneMaterial.emissive;
+        if(hasTextureIndex(sceneMaterial.emissiveTextureIndex)) {
+            hit.material.emissive *= sampleSceneEmissiveTexture(sceneMaterial.emissiveTextureIndex, hit.uv).rgb;
         }
 
-        if(useAoTexture == 1) {
-            float ao = mix(1.0, texture(aoTexture, hit.uv).r, clamp(aoIntensity, 0.0, 1.0));
-            hit.material.baseColor *= ao;
-        }
-
-        if(useNormalTexture == 1) {
-            vec3 tangentSpaceNormal = texture(normalTexture, hit.uv).xyz * 2.0 - 1.0;
-            tangentSpaceNormal.xy *= normalScale;
+        if(hasTextureIndex(sceneMaterial.normalTextureIndex)) {
+            vec3 tangentSpaceNormal = sampleSceneNormalTexture(sceneMaterial.normalTextureIndex, hit.uv).xyz * 2.0 - 1.0;
+            tangentSpaceNormal.xy *= sceneMaterial.normalScale;
             tangentSpaceNormal = normalize(tangentSpaceNormal);
             hit.normal = normalize(
                 hit.tangent * tangentSpaceNormal.x +
                 hit.bitangent * tangentSpaceNormal.y +
                 hit.normal * tangentSpaceNormal.z
             );
+            if(dot(hit.normal, hit.geometricNormal) < 0.0) {
+                hit.normal = -hit.normal;
+            }
+        }
+
+        if(dot(hit.normal, -hit.rayDirec) < 0.0) {
+            hit.normal = -hit.normal;
         }
     }
 
+    RayHit traceScene(Ray ray, inout vec3 transmissionFilter) {
+        Ray currentRay;
+        currentRay.origin = ray.origin;
+        currentRay.direction = ray.direction;
+
+        if(materialPreset != 0) {
+            return hitScene(currentRay);
+        }
+
+        for(int surfaceStep = 0; surfaceStep < MAX_TRANSPARENT_SURFACE_STEPS; ++surfaceStep) {
+            if(surfaceStep >= maxTransparentSteps) {
+                break;
+            }
+
+            RayHit hit = hitScene(currentRay);
+            if(!hit.isHit) {
+                return hit;
+            }
+
+            vec3 surfaceBaseColor = vec3(1.0);
+            float surfaceAlpha = 1.0;
+            Material sceneMaterial = getSceneSurfaceMaterial(hit.materialIndex, hit.uv, surfaceBaseColor, surfaceAlpha);
+
+            if(sceneMaterial.alphaMode >= 0.5 && sceneMaterial.alphaMode < 1.5 && surfaceAlpha < 0.5) {
+                currentRay.origin = hit.position + currentRay.direction * RAY_OFFSET_EPSILON * 2.0;
+            } else if(sceneMaterial.alphaMode >= 1.5 && surfaceAlpha < 1.0 - EPSILON) {
+                transmissionFilter *= mix(vec3(1.0), surfaceBaseColor, clamp(surfaceAlpha, 0.0, 1.0));
+                currentRay.origin = hit.position + currentRay.direction * RAY_OFFSET_EPSILON * 2.0;
+            } else {
+                applyResolvedSceneMaterial(hit, sceneMaterial, surfaceBaseColor, surfaceAlpha);
+                return hit;
+            }
+        }
+
+        return createHit();
+    }
+
+    vec3 renderDebugHit(
+        RayHit hit,
+        vec3 materialBase,
+        float materialRoughness,
+        float materialMetallic,
+        vec3 materialEmissive
+    ) {
+        if(debugMode == 1) {
+            return hit.material.baseColor;
+        }
+        if(debugMode == 2) {
+            return vec3(hit.uv, 0.0);
+        }
+        if(debugMode == 3) {
+            return vec3(fract(hit.uv), 0.0);
+        }
+        if(debugMode == 4) {
+            float checker = mod(floor(hit.uv.x * 20.0) + floor(hit.uv.y * 20.0), 2.0);
+            return vec3(checker);
+        }
+        if(debugMode == 5) {
+            return materialIdDebugColor(hit.materialIndex);
+        }
+        if(debugMode == 6) {
+            return materialBase;
+        }
+        if(debugMode == 7) {
+            return vec3(materialRoughness);
+        }
+        if(debugMode == 8) {
+            return vec3(materialMetallic);
+        }
+        if(debugMode == 9) {
+            return materialEmissive;
+        }
+
+        vec3 viewDirection = -hit.rayDirec;
+        vec3 surfaceGeometricNormal = hit.geometricNormal;
+
+        if(debugMode == 10) {
+            float facing = abs(dot(surfaceGeometricNormal, viewDirection));
+            return materialBase * max(facing, 0.15);
+        }
+        if(debugMode == 11) {
+            return surfaceGeometricNormal * 0.5 + 0.5;
+        }
+        if(debugMode == 12) {
+            // FlightHelmet's HoseMat is material 0 in the source glTF and
+            // remains first under the current SceneGenerator traversal order.
+            return hit.materialIndex < 0.5 ? vec3(1.0, 0.1, 0.1) : vec3(0.02);
+        }
+        if(debugMode == 13) {
+            float normalizedDistance = clamp(hit.distance / 2.0, 0.0, 1.0);
+            return vec3(normalizedDistance);
+        }
+
+        return materialBase;
+    }
+
+    #ifdef ENABLE_DIRECT_ENV_MIS
+    vec3 sampleDirectEnvironmentMIS(
+        RayHit hit,
+        vec3 viewDirection,
+        vec3 surfaceNormal,
+        vec3 tangent,
+        vec3 bitangent,
+        vec3 throughput
+    ) {
+        float environmentPdf = 0.0;
+        vec3 lightDirection = SampleEnvironmentDirection(environmentPdf);
+        float incomingCosine = max(dot(surfaceNormal, lightDirection), 0.0);
+        if(environmentPdf <= EPSILON || incomingCosine <= 0.0) {
+            return vec3(0.0);
+        }
+
+        Ray shadowRay;
+        shadowRay.origin = hit.position + hit.geometricNormal * (RAY_OFFSET_EPSILON * (dot(lightDirection, hit.geometricNormal) >= 0.0 ? 1.0 : -1.0));
+        shadowRay.direction = lightDirection;
+
+        vec3 transmissionFilter = vec3(1.0);
+        RayHit shadowHit = traceScene(shadowRay, transmissionFilter);
+        if(shadowHit.isHit) {
+            return vec3(0.0);
+        }
+
+        vec3 environmentRadiance = sampleHdr(shadowRay);
+        vec3 brdf = BRDF_Evaluate(viewDirection, surfaceNormal, lightDirection, tangent, bitangent, hit.material);
+        float brdfPdf = BRDFPDF(viewDirection, surfaceNormal, lightDirection, hit.material);
+        float environmentWeight = MISPowerWeight(environmentPdf, brdfPdf);
+        return clampContribution(
+            throughput * transmissionFilter * environmentRadiance * brdf * incomingCosine * environmentWeight / environmentPdf,
+            MAX_SAMPLE_CONTRIBUTION
+        );
+    }
+    #endif
+
     vec3 pathTrace() {
-        Ray ray = createCameraRay();
+        Ray cameraRay = createCameraRay();
+        Ray ray;
+        ray.origin = cameraRay.origin;
+        ray.direction = cameraRay.direction;
     
         vec3 emittedRadiance = vec3(0.0);
         vec3 indirectRadiance = vec3(0.0);
@@ -60,32 +224,52 @@ export const Common =  /* glsl */`
             if(rand() > survivalProb) break;
             throughput /= survivalProb;
 
-            RayHit hit = hitScene(ray);
+            vec3 surfaceFilter = vec3(1.0);
+            RayHit hit = traceScene(ray, surfaceFilter);
             if(hit.isHit) {
-                applyOriginMaterial(hit);
+                throughput *= surfaceFilter;
 
-                if(debugMode == 1) {
-                    return hit.material.baseColor;
+                if(debugMode != 0) {
+                    return renderDebugHit(
+                        hit,
+                        hit.material.baseColor,
+                        hit.material.roughness,
+                        hit.material.metallic,
+                        hit.material.emissive
+                    );
                 }
-                if(debugMode == 2) {
-                    return vec3(hit.uv, 0.0);
-                }
-                if(debugMode == 3) {
-                    return vec3(fract(hit.uv), 0.0);
-                }
-                if(debugMode == 4) {
-                    float checker = mod(floor(hit.uv.x * 20.0) + floor(hit.uv.y * 20.0), 2.0);
-                    return vec3(checker);
-                }
-        
                 if(bounce == 0) {
                     emittedRadiance = hit.material.emissive;
                 }
         
                 vec3 viewDirection = -hit.rayDirec;
+                vec3 surfaceGeometricNormal = hit.geometricNormal;
                 vec3 surfaceNormal = hit.normal;
-                vec3 tangent, bitangent;
-                getTangent(surfaceNormal, tangent, bitangent);
+                vec3 tangent = hit.tangent;
+                vec3 bitangent = hit.bitangent;
+
+                // Thin double-sided geometry is more stable when the sampling hemisphere
+                // is anchored to the geometric normal instead of the perturbed normal map.
+                if(hit.material.doubleSided > 0.5) {
+                    surfaceNormal = surfaceGeometricNormal;
+                    getTangent(surfaceNormal, tangent, bitangent);
+                }
+
+                #ifdef ENABLE_DIRECT_ENV_MIS
+                if(bounce == 0 && hit.material.roughness >= 0.25) {
+                    float specularSampleWeight = BRDFSpecularSampleWeight(hit.material);
+                    if(specularSampleWeight < 0.75) {
+                        indirectRadiance += sampleDirectEnvironmentMIS(
+                            hit,
+                            viewDirection,
+                            surfaceNormal,
+                            tangent,
+                            bitangent,
+                            throughput
+                        );
+                    }
+                }
+                #endif
 
                 float samplePdf = 0.0;
                 vec3 sampledDirection = SampleBRDFDirection(
@@ -104,30 +288,38 @@ export const Common =  /* glsl */`
                 vec3 brdf = BRDF_Evaluate(viewDirection, surfaceNormal, sampledDirection, tangent, bitangent, hit.material);
         
                 // ray reflection
-                ray.origin = hit.position + hit.normal * EPSILON;
+                float offsetDirection = dot(sampledDirection, surfaceGeometricNormal) >= 0.0 ? 1.0 : -1.0;
+                ray.origin = hit.position + surfaceGeometricNormal * (RAY_OFFSET_EPSILON * offsetDirection);
                 ray.direction = sampledDirection;
-                RayHit bounceHit = hitScene(ray);
-                if(bounceHit.isHit) {
-                    applyOriginMaterial(bounceHit);
-                }
+                vec3 bounceFilter = vec3(1.0);
+                RayHit bounceHit = traceScene(ray, bounceFilter);
         
                 // miss
                 if(!bounceHit.isHit) {
                     vec3 skyColor = sampleHdr(ray);
-                    indirectRadiance += throughput * skyColor * brdf * incomingCosine / samplePdf;
+                    #ifdef ENABLE_ENV_MISS_MIS
+                    float environmentPdf = EnvironmentPDF(sampledDirection);
+                    float brdfWeight = MISPowerWeight(samplePdf, environmentPdf);
+                    vec3 skyContribution = throughput * bounceFilter * skyColor * brdf * incomingCosine * brdfWeight / samplePdf;
+                    #else
+                    vec3 skyContribution = throughput * bounceFilter * skyColor * brdf * incomingCosine / samplePdf;
+                    #endif
+                    indirectRadiance += clampContribution(skyContribution, MAX_SAMPLE_CONTRIBUTION);
                     break;
                 }
         
                 // accumulate energy
                 vec3 emissiveRadiance = bounceHit.material.emissive;
-                indirectRadiance += throughput * emissiveRadiance * brdf * incomingCosine / samplePdf;
+                vec3 emissiveContribution = throughput * bounceFilter * emissiveRadiance * brdf * incomingCosine / samplePdf;
+                indirectRadiance += clampContribution(emissiveContribution, MAX_SAMPLE_CONTRIBUTION);
         
                 // next recursion
-                hit = bounceHit;
+                throughput *= bounceFilter;
                 throughput *= brdf * incomingCosine / samplePdf;
+                throughput = clampContribution(throughput, MAX_THROUGHPUT_LUMINANCE);
         
             } else {
-                return sampleHdr(ray);
+                return throughput * surfaceFilter * sampleHdr(ray);
             }
         }
         return emittedRadiance + indirectRadiance;

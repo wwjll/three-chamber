@@ -4,11 +4,12 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import {
     texelsPerTriangle,
     texelsPerBVHNode,
+    texelsPerMaterial,
     fixedDataTextureWidth
 } from './Constants'
 
 class Triangle {
-    constructor(v1, v2, v3, n1, n2, n3, uv1, uv2, uv3) {
+    constructor(v1, v2, v3, n1, n2, n3, uv1, uv2, uv3, materialIndex = 0) {
         // positions normals and uvs
         this.p1 = v1;
         this.p2 = v2;
@@ -19,6 +20,7 @@ class Triangle {
         this.uv1 = uv1;
         this.uv2 = uv2;
         this.uv3 = uv3;
+        this.materialIndex = materialIndex;
 
         this.aa = new THREE.Vector3(Infinity, Infinity, Infinity);
         this.bb = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
@@ -61,7 +63,7 @@ class BVHNode {
 
 class BVHBuilder {
 
-    constructor(geometry, leafSize = 8) {
+    constructor(geometry, materialIndices = [], leafSize = 8) {
         this.position = geometry.attributes.position.array;
         if (!geometry.attributes.normal) {
             geometry.computeVertexNormals();
@@ -74,6 +76,7 @@ class BVHBuilder {
             this.uv = [];
         }
         this.totalTriangles = this.position.length / 9;
+        this.materialIndices = materialIndices;
         this.triangles = [];
         this.nodes = [];
         this.leafSize = leafSize;
@@ -128,7 +131,8 @@ class BVHBuilder {
                 new THREE.Vector2(
                     this.uv[6 * i + 4],
                     this.uv[6 * i + 5],
-                )
+                ),
+                this.materialIndices[i] ?? 0
             ));
         }
     }
@@ -438,49 +442,117 @@ class BVHBuilder {
 
     }
 
-    build(type = 1, method = 0) {
-        switch ((type << 1) || method) {
-            case 0:
-                this.buildRecursiveMedian(0, this.totalTriangles - 1);
-                break;
-            case 1:
-                this.buildRecursiveMedian(0, this.totalTriangles - 1);
-                break;
-            case 2:
-                this.buildIterativeMedian();
-                break;
-            case 3:
-                this.buildIterativeSAH();
-                break;
+    build(type = 0, method = 0) {
+        if (type === 0) {
+            if (method === 1) {
+                this.buildRecursiveSAH(0, this.totalTriangles - 1);
+                return;
+            }
+
+            this.buildRecursiveMedian(0, this.totalTriangles - 1);
+            return;
         }
+
+        if (method === 1) {
+            this.buildIterativeSAH();
+            return;
+        }
+
+        this.buildIterativeMedian();
     }
 }
 
 export class SceneGenerator {
 
-    constructor(model) {
+    constructor(model, options = {}) {
         this.model = model;
+        this.meshFilter = options.meshFilter || null;
         this.geometries = [];
+        this.geometryMaterialIndices = [];
+        this.materials = [];
+        this.materialIndexMap = new Map();
+        this.textureSlotMaps = {
+            albedo: new Map(),
+            normal: new Map(),
+            metallicRoughness: new Map(),
+            emissive: new Map(),
+        };
+        this.textureSlots = {
+            albedo: [],
+            normal: [],
+            metallicRoughness: [],
+            emissive: [],
+        };
+    }
+
+    registerTexture(type, texture) {
+        if (!texture) {
+            return -1;
+        }
+
+        const textureSlotMap = this.textureSlotMaps[type];
+        const textureSlots = this.textureSlots[type];
+        const key = texture.uuid;
+
+        if (textureSlotMap.has(key)) {
+            return textureSlotMap.get(key);
+        }
+
+        const slotIndex = textureSlots.length;
+        textureSlotMap.set(key, slotIndex);
+        textureSlots.push(texture);
+        return slotIndex;
+    }
+
+    registerMaterial(material) {
+        const key = material?.uuid || '__default_material__';
+        if (!this.materialIndexMap.has(key)) {
+            this.materialIndexMap.set(key, this.materials.length);
+            this.materials.push(material || null);
+        }
+        return this.materialIndexMap.get(key);
     }
 
     generate() {
         this.model.updateWorldMatrix(true, true);
 
         this.model.traverse(child => {
-            if (child.isMesh) {
-                const geometry = child.geometry.clone();
+            if (child.isMesh && (!this.meshFilter || this.meshFilter(child))) {
+                const geometry = child.geometry.clone().toNonIndexed();
                 geometry.applyMatrix4(child.matrixWorld);
+
+                const triangleCount = geometry.attributes.position.array.length / 9;
+                const materialIndices = new Array(triangleCount).fill(0);
+                const materials = Array.isArray(child.material) ? child.material : [child.material];
+
+                if (materials.length > 1 && geometry.groups.length > 0) {
+                    geometry.groups.forEach(group => {
+                        const triangleStart = Math.floor(group.start / 3);
+                        const triangleCountInGroup = Math.floor(group.count / 3);
+                        const materialIndex = this.registerMaterial(materials[group.materialIndex] || materials[0] || null);
+                        for (let i = 0; i < triangleCountInGroup; i++) {
+                            materialIndices[triangleStart + i] = materialIndex;
+                        }
+                    });
+                } else {
+                    const materialIndex = this.registerMaterial(materials[0] || null);
+                    materialIndices.fill(materialIndex);
+                }
+
                 this.geometries.push(geometry);
+                this.geometryMaterialIndices.push(materialIndices);
             }
         });
 
-        const mergedGeometry = mergeGeometries(this.geometries).toNonIndexed();
-        const builder = new BVHBuilder(mergedGeometry);
+        if (this.geometries.length === 0) {
+            throw new Error('[PathTracing] No meshes matched the SceneGenerator filter.');
+        }
 
-        const start = performance.now();
+        const mergedGeometry = mergeGeometries(this.geometries, false);
+        const mergedMaterialIndices = this.geometryMaterialIndices.flat();
+        const builder = new BVHBuilder(mergedGeometry, mergedMaterialIndices);
+
         builder.build();
-        const end = performance.now();
-        console.log(`BVH construct time: ${(end - start).toFixed(2)} ms.`)
 
         const { totalTriangles, triangles, nodes } = builder;
 
@@ -542,7 +614,7 @@ export class SceneGenerator {
             triangleArray[stride * i + 23] = vt3.y;
 
             //slot 6
-            triangleArray[stride * i + 24] = 0;
+            triangleArray[stride * i + 24] = triangle.materialIndex;
             triangleArray[stride * i + 25] = 0;
             triangleArray[stride * i + 26] = 0;
             triangleArray[stride * i + 27] = 0;
@@ -573,6 +645,71 @@ export class SceneGenerator {
         triangleDataTexture.generateMipmaps = false;
         triangleDataTexture.needsUpdate = true;
         triangleDataTexture.unpackAlignment = 8;
+
+        totalTexels = texelsPerMaterial * this.materials.length;
+        texelHeight = Math.max(1, ~~Math.pow(2, Math.log2(Math.max(totalTexels / texelWidth, 1))) + 1);
+        const mh = texelHeight;
+        const materialArray = new Float32Array(texelWidth * texelHeight * 4);
+        stride = 20;
+
+        for (let i = 0; i < this.materials.length; ++i) {
+            const material = this.materials[i];
+            const color = material?.color || new THREE.Color(1, 1, 1);
+            const emissive = material?.emissive || new THREE.Color(0, 0, 0);
+            const emissiveIntensity = material?.emissiveIntensity ?? 1.0;
+            const alphaMode = material?.transparent ? 2.0 : ((material?.alphaTest ?? 0.0) > 0.0 ? 1.0 : 0.0);
+            if (
+                material?.roughnessMap &&
+                material?.metalnessMap &&
+                material.roughnessMap.uuid !== material.metalnessMap.uuid
+            ) {
+                console.warn('[PathTracing] roughnessMap and metalnessMap differ; using metalnessMap as metallic-roughness texture.', material);
+            }
+            const metallicRoughnessTexture = material?.metalnessMap || material?.roughnessMap || null;
+
+            materialArray[stride * i + 0] = color.r;
+            materialArray[stride * i + 1] = color.g;
+            materialArray[stride * i + 2] = color.b;
+            materialArray[stride * i + 3] = material?.roughness ?? 1.0;
+
+            materialArray[stride * i + 4] = material?.metalness ?? 0.0;
+            materialArray[stride * i + 5] = emissive.r * emissiveIntensity;
+            materialArray[stride * i + 6] = emissive.g * emissiveIntensity;
+            materialArray[stride * i + 7] = emissive.b * emissiveIntensity;
+
+            materialArray[stride * i + 8] = this.registerTexture('albedo', material?.map || null);
+            materialArray[stride * i + 9] = this.registerTexture('normal', material?.normalMap || null);
+            materialArray[stride * i + 10] = this.registerTexture('metallicRoughness', metallicRoughnessTexture);
+            materialArray[stride * i + 11] = this.registerTexture('emissive', material?.emissiveMap || null);
+
+            materialArray[stride * i + 12] = material?.opacity ?? 1.0;
+            materialArray[stride * i + 13] = material?.normalScale?.x ?? 1.0;
+            materialArray[stride * i + 14] = material?.normalScale?.y ?? 1.0;
+            materialArray[stride * i + 15] = alphaMode;
+            materialArray[stride * i + 16] = material?.side === THREE.DoubleSide ? 1.0 : 0.0;
+            materialArray[stride * i + 17] = 0.0;
+            materialArray[stride * i + 18] = 0.0;
+            materialArray[stride * i + 19] = 0.0;
+        }
+
+        const materialDataTexture = new THREE.DataTexture(
+            materialArray,
+            texelWidth,
+            texelHeight,
+            THREE.RGBAFormat,
+            THREE.FloatType,
+            THREE.Texture.DEFAULT_MAPPING,
+            THREE.ClampToEdgeWrapping,
+            THREE.ClampToEdgeWrapping,
+            THREE.NearestFilter,
+            THREE.NearestFilter,
+            1
+        );
+        materialDataTexture.colorSpace = THREE.NoColorSpace;
+        materialDataTexture.flipY = false;
+        materialDataTexture.generateMipmaps = false;
+        materialDataTexture.needsUpdate = true;
+        materialDataTexture.unpackAlignment = 8;
 
         // BVH Datatexture
         const totalNodes = nodes.length;
@@ -641,6 +778,13 @@ export class SceneGenerator {
                 dataTexture: bvhDataTexture,
                 textureWidth: fixedDataTextureWidth,
                 textureHeight: bh
+            },
+            material: {
+                dataTexture: materialDataTexture,
+                textureWidth: fixedDataTextureWidth,
+                textureHeight: mh,
+                count: this.materials.length,
+                textures: this.textureSlots,
             }
 
         }

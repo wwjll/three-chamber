@@ -1,4 +1,5 @@
 import { MaterialBase } from '../materials/MaterialBase'
+import * as THREE from 'three';
 
 import { Struct } from '../shaders/struct.glsl'
 import { Material } from '../shaders/material.glsl'
@@ -15,6 +16,12 @@ export class PathTracingMaterial extends MaterialBase {
     constructor() {
         super({
 
+            glslVersion: THREE.GLSL3,
+
+            defines: {
+                ENABLE_ENV_MISS_MIS: 1,
+            },
+
             transparent: false,
 
             depthWrite: false,
@@ -29,32 +36,26 @@ export class PathTracingMaterial extends MaterialBase {
                 projectionMatrixInverse: { type: "m4", value: null },
                 texelsPerTriangle: { type: "f", value: null },
                 texelsPerBVHNode: { type: "f", value: null },
+                texelsPerMaterial: { type: "f", value: null },
                 triangleDataTexture: { type: "t", value: null },
                 triangleDataTextureSize: { type: "v2", value: null },
                 bvhNodeDataTexture: { type: "t", value: null },
                 bvhNodeDataTextureSize: { type: "v2", value: null },
+                materialDataTexture: { type: "t", value: null },
+                materialDataTextureSize: { type: "v2", value: null },
                 outTexture: { type: "t", value: null },
-                albedoTexture: { type: "t", value: null },
-                normalTexture: { type: "t", value: null },
-                roughnessTexture: { type: "t", value: null },
-                metalnessTexture: { type: "t", value: null },
-                aoTexture: { type: "t", value: null },
-                emissiveTexture: { type: "t", value: null },
-                useAlbedoTexture: { type: "i", value: 0 },
-                useNormalTexture: { type: "i", value: 0 },
-                useRoughnessTexture: { type: "i", value: 0 },
-                useMetalnessTexture: { type: "i", value: 0 },
-                useAoTexture: { type: "i", value: 0 },
-                useEmissiveTexture: { type: "i", value: 0 },
-                baseColorFactor: { type: "v3", value: null },
-                roughnessFactor: { type: "f", value: 1.0 },
-                metalnessFactor: { type: "f", value: 0.0 },
-                emissiveFactor: { type: "v3", value: null },
-                normalScale: { type: "v2", value: null },
-                aoIntensity: { type: "f", value: 1.0 },
+                sceneAlbedoTextureArray: { type: 't', value: null },
+                sceneNormalTextureArray: { type: 't', value: null },
+                sceneMetallicRoughnessTextureArray: { type: 't', value: null },
+                sceneEmissiveTextureArray: { type: 't', value: null },
                 materialPreset: { type: "i", value: 0 },
                 debugMode: { type: "i", value: 0 },
                 hdrTexture: { type: "t", value: null },
+                hdrConditionalDistributionTexture: { type: "t", value: null },
+                hdrMarginalDistributionTexture: { type: "t", value: null },
+                hdrResolution: { type: "v2", value: null },
+                hdrTotalWeight: { type: "f", value: 0.0 },
+                maxTransparentSteps: { type: "i", value: 2 },
             },
 
             vertexShader: /* glsl */`
@@ -77,8 +78,16 @@ export class PathTracingMaterial extends MaterialBase {
                 #define ONE_OVER_TWO_PI  0.15915494309
                 #define INFINITY 1000000.0
                 #define EPSILON 0.00001
+                // Keep determinant tolerance much smaller than barycentric / distance tolerances:
+                // small triangles like FlightHelmet's hoses produce small but still valid det values.
+                #define TRIANGLE_DETERMINANT_EPSILON 0.0000001
+                #define TRIANGLE_BARYCENTRIC_EPSILON 0.00001
+                #define TRIANGLE_DISTANCE_EPSILON 0.00001
+                #define AABB_EPSILON 0.00001
+                #define RAY_OFFSET_EPSILON 0.0002
 
                 in vec3 pos;
+                out highp vec4 pc_fragColor;
                 uniform float samples;
                 uniform int maxBounce;
                 uniform vec2 resolution;
@@ -87,32 +96,30 @@ export class PathTracingMaterial extends MaterialBase {
                 uniform sampler2D hdrTexture;
                 uniform sampler2D triangleDataTexture;
                 uniform sampler2D bvhNodeDataTexture;
+                uniform sampler2D materialDataTexture;
                 uniform sampler2D outTexture;
-                uniform sampler2D albedoTexture;
-                uniform sampler2D normalTexture;
-                uniform sampler2D roughnessTexture;
-                uniform sampler2D metalnessTexture;
-                uniform sampler2D aoTexture;
-                uniform sampler2D emissiveTexture;
-                uniform int useAlbedoTexture;
-                uniform int useNormalTexture;
-                uniform int useRoughnessTexture;
-                uniform int useMetalnessTexture;
-                uniform int useAoTexture;
-                uniform int useEmissiveTexture;
-                uniform vec3 baseColorFactor;
-                uniform float roughnessFactor;
-                uniform float metalnessFactor;
-                uniform vec3 emissiveFactor;
-                uniform vec2 normalScale;
-                uniform float aoIntensity;
+                uniform highp sampler2DArray sceneAlbedoTextureArray;
+                uniform highp sampler2DArray sceneNormalTextureArray;
+                uniform highp sampler2DArray sceneMetallicRoughnessTextureArray;
+                uniform highp sampler2DArray sceneEmissiveTextureArray;
                 uniform int materialPreset;
                 uniform int debugMode;
+                uniform sampler2D hdrConditionalDistributionTexture;
+                uniform sampler2D hdrMarginalDistributionTexture;
+                uniform vec2 hdrResolution;
+                uniform float hdrTotalWeight;
+                uniform int maxTransparentSteps;
+                // Compatibility shim for stale bundles that still reference the old
+                // runtime MIS uniform name. The actual feature toggle now uses
+                // ENABLE_DIRECT_ENV_MIS as a compile-time define.
+                #define enableDirectEnvironmentMIS 0
 
                 uniform float texelsPerTriangle;
                 uniform float texelsPerBVHNode;
+                uniform float texelsPerMaterial;
                 uniform vec2 triangleDataTextureSize;
                 uniform vec2 bvhNodeDataTextureSize;
+                uniform vec2 materialDataTextureSize;
 
                 uint seed;
 
@@ -125,8 +132,32 @@ export class PathTracingMaterial extends MaterialBase {
                 ${Hit}
                 ${Brdf}
                 ${Sample}
+
+                bool hasTextureIndex(float textureIndex) {
+                    return textureIndex >= 0.0;
+                }
+
+                vec4 sampleSceneAlbedoTexture(float textureIndex, vec2 uv) {
+                    return texture(sceneAlbedoTextureArray, vec3(uv, textureIndex));
+                }
+
+                vec4 sampleSceneNormalTexture(float textureIndex, vec2 uv) {
+                    return texture(sceneNormalTextureArray, vec3(uv, textureIndex));
+                }
+
+                vec4 sampleSceneMetallicRoughnessTexture(float textureIndex, vec2 uv) {
+                    return texture(sceneMetallicRoughnessTextureArray, vec3(uv, textureIndex));
+                }
+
+                vec4 sampleSceneEmissiveTexture(float textureIndex, vec2 uv) {
+                    return texture(sceneEmissiveTextureArray, vec3(uv, textureIndex));
+                }
+
                 ${Common}
             `
         })
+
+        this.uniforms.hdrResolution.value = new THREE.Vector2(1, 1);
+        this.uniforms.materialDataTextureSize.value = new THREE.Vector2(1, 1);
     }
 }

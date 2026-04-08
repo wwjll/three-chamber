@@ -3,6 +3,7 @@ export const Struct =  /* glsl */`
         vec3 p1, p2, p3;
         vec3 n1, n2, n3;
         vec2 uv1, uv2, uv3;
+        float materialIndex;
     };
 
     struct Material {
@@ -20,6 +21,16 @@ export const Struct =  /* glsl */`
         float clearcoatGloss;
         float IOR;
         float transmission;
+        float albedoTextureIndex;
+        float normalTextureIndex;
+        float metallicRoughnessTextureIndex;
+        float aoTextureIndex;
+        float emissiveTextureIndex;
+        vec2 normalScale;
+        float aoIntensity;
+        float alpha;
+        float alphaMode;
+        float doubleSided;
     };
     
     struct Ray {
@@ -33,9 +44,11 @@ export const Struct =  /* glsl */`
         float distance;
         vec3 position;
         vec3 normal;
+        vec3 geometricNormal;
         vec3 tangent;
         vec3 bitangent;
         vec2 uv;
+        float materialIndex;
         vec3 rayDirec;
         Material material;
     };

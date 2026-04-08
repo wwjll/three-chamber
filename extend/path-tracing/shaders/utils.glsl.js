@@ -49,6 +49,37 @@ export const Utils =  /* glsl */`
         vec2 t1 = texel4.zw;
         vec2 t2 = texel5.xy;
         vec2 t3 = texel5.zw;
-        return Triangle(p1, p2, p3, n1, n2, n3, t1, t2, t3);
+        float materialIndex = texelFetch(triangleDataTexture, ivec2(mod(texelsPerTriangle * i + 6.0, width), texelsPerTriangle * i / width), 0).x;
+        return Triangle(p1, p2, p3, n1, n2, n3, t1, t2, t3, materialIndex);
+    }
+
+    Material getSceneMaterial(float i) {
+        float width = materialDataTextureSize.x;
+        ivec2 uv0 = ivec2(mod(texelsPerMaterial * i + 0.0, width), texelsPerMaterial * i / width);
+        ivec2 uv1 = ivec2(mod(texelsPerMaterial * i + 1.0, width), texelsPerMaterial * i / width);
+        ivec2 uv2 = ivec2(mod(texelsPerMaterial * i + 2.0, width), texelsPerMaterial * i / width);
+        ivec2 uv3 = ivec2(mod(texelsPerMaterial * i + 3.0, width), texelsPerMaterial * i / width);
+        ivec2 uv4 = ivec2(mod(texelsPerMaterial * i + 4.0, width), texelsPerMaterial * i / width);
+
+        vec4 texel0 = texelFetch(materialDataTexture, uv0, 0);
+        vec4 texel1 = texelFetch(materialDataTexture, uv1, 0);
+        vec4 texel2 = texelFetch(materialDataTexture, uv2, 0);
+        vec4 texel3 = texelFetch(materialDataTexture, uv3, 0);
+        vec4 texel4 = texelFetch(materialDataTexture, uv4, 0);
+
+        Material material = DebugAlbedo();
+        material.baseColor = texel0.rgb;
+        material.roughness = texel0.w;
+        material.metallic = texel1.x;
+        material.emissive = texel1.yzw;
+        material.albedoTextureIndex = texel2.x;
+        material.normalTextureIndex = texel2.y;
+        material.metallicRoughnessTextureIndex = texel2.z;
+        material.emissiveTextureIndex = texel2.w;
+        material.alpha = texel3.x;
+        material.normalScale = texel3.yz;
+        material.alphaMode = texel3.w;
+        material.doubleSided = texel4.x;
+        return material;
     }
 `
