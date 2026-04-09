@@ -1,5 +1,5 @@
 
-import * as THREE from 'three';
+import { AmbientLight, AnimationMixer, Box3, Color, DirectionalLight, Mesh, PCFSoftShadowMap, PerspectiveCamera, PlaneGeometry, Scene, ShadowMaterial, Vector3, WebGLRenderer } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TextureLoader } from 'three/src/loaders/TextureLoader.js';
@@ -19,7 +19,7 @@ const assetUrl = getAssetURL();
 const renderLoop = getRenderLoopController();
 const noiseTexture = assetUrl + 'textures/noise.png';
 const fireTexture = assetUrl + 'textures/fire.jpg';
-const modelUrl = 'https://raw.githubusercontent.com/wwjll/three-chamber/master/assets/models/animation/soldier.glb';
+const modelUrl = 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb';
 
 let camera, scene, renderer, controls, mixer;
 let stats, pane;
@@ -32,9 +32,9 @@ const FRAME_RATE = 30;
 let windwoWidth = window.innerWidth;
 let windowHeight = window.innerHeight;
 const dimension = {
-    center: new THREE.Vector3(),
-    min: new THREE.Vector3(),
-    max: new THREE.Vector3()
+    center: new Vector3(),
+    min: new Vector3(),
+    max: new Vector3()
 };
 let shaders = [];
 let isDissolving = false;
@@ -56,18 +56,18 @@ let signedDissolveSpeed = params.dissolveSpeed;
 init();
 
 function init() {
-    renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer = new WebGLRenderer({ antialias: false });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(windwoWidth, windowHeight);
     renderer.setClearColor(BG_COLOR, 1);
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = PCFSoftShadowMap;
 
     document.body.appendChild(renderer.domElement);
-    scene = new THREE.Scene();
-    scene.add(new THREE.AmbientLight(0xf0f0f0, 3));
+    scene = new Scene();
+    scene.add(new AmbientLight(0xf0f0f0, 3));
 
-    camera = new THREE.PerspectiveCamera(70, windwoWidth / windowHeight, 0.1, 1000);
+    camera = new PerspectiveCamera(70, windwoWidth / windowHeight, 0.1, 1000);
     scene.add(camera);
 
     controls = new OrbitControls(camera, renderer.domElement);
@@ -145,7 +145,7 @@ function init() {
 
             // animations
             const animations = gltf.animations;
-            mixer = new THREE.AnimationMixer(model);
+            mixer = new AnimationMixer(model);
 
             if (animations && animations.length > 0) {
                 const animationAction = mixer.clipAction(animations[3]);
@@ -156,16 +156,16 @@ function init() {
             }
 
             // shadowPlane
-            const plane = new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.ShadowMaterial({ color: 0xffffff, opacity: 0.25, transparent: true }));
+            const plane = new Mesh(new PlaneGeometry(), new ShadowMaterial({ color: 0xffffff, opacity: 0.25, transparent: true }));
             plane.rotation.x = - Math.PI / 2;
             plane.receiveShadow = true;
             plane.scale.setScalar(50);
             scene.add(plane);
 
-            const box = new THREE.Box3();
+            const box = new Box3();
             box.setFromObject(model);
-            const size = box.getSize(new THREE.Vector3());
-            const target = new THREE.Vector3();
+            const size = box.getSize(new Vector3());
+            const target = new Vector3();
             const center = box.getCenter(target);
             target.y += 2 * size.y;
             controls.target = target;
@@ -182,7 +182,7 @@ function init() {
             controls.update();
 
             // illuminate the scene for better view
-            const light = new THREE.DirectionalLight(0xffffff, 5);
+            const light = new DirectionalLight(0xffffff, 5);
             light.position.copy(camera.position);
             light.castShadow = true;
 
@@ -262,7 +262,7 @@ function updateContinuousState() {
 function setDissolveShader(shader, type = 1) {
     function setCommon(shader) {
 
-        shader.uniforms.edgeColor = { value: new THREE.Color(params.edgeColor) };
+        shader.uniforms.edgeColor = { value: new Color(params.edgeColor) };
         shader.uniforms.edgeWidth = { value: params.edgeWidth };
         shader.uniforms.dissolveSpeed = { value: params.dissolveSpeed };
         shader.uniforms.dissolveProgress = { value: params.dissolveProgress };

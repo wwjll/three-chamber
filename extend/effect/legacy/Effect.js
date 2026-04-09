@@ -1,2 +1,21 @@
-export * from './Dissolve.js';
-export * from './HeightWarp.js';
+import {
+    DISSOLVE_VERTEX_COMMON,
+    DISSOLVE_VERTEX_UV,
+    DISSOLVE_FRAGMENT_COMMON,
+    DISSOLVE_FRAGMENT_TYPE0,
+    DISSOLVE_FRAGMENT_TYPE1,
+} from './Dissolve.js';
+import {
+    HEIGHT_WARP_VERTEX,
+    HEIGHT_WARP_FRAGMENT,
+} from './HeightWarp.js';
+
+export {
+    DISSOLVE_VERTEX_COMMON,
+    DISSOLVE_VERTEX_UV,
+    DISSOLVE_FRAGMENT_COMMON,
+    DISSOLVE_FRAGMENT_TYPE0,
+    DISSOLVE_FRAGMENT_TYPE1,
+    HEIGHT_WARP_VERTEX,
+    HEIGHT_WARP_FRAGMENT,
+};

@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { AmbientLight, Box3, CameraHelper, PerspectiveCamera, Raycaster, Scene, SpotLight, Vector3, WebGLRenderer } from 'three';
 import * as TWEEN from '@tweenjs/tween.js/dist/tween.esm.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -10,10 +10,10 @@ import { TrackEditor } from '/extend/editor/TrackEditor.js';
 const assetUrl = getAssetURL();
 const modelUrl = assetUrl + 'models/scenes/collision-world.glb';
 const points = [
-    new THREE.Vector3(13.66, 14.28, -7.66),
-    new THREE.Vector3(0.99, 5.25, 3.95),
-    new THREE.Vector3(5, -0.68, 11.72),
-    new THREE.Vector3(-2.08, -0.36, 10.97)
+    new Vector3(13.66, 14.28, -7.66),
+    new Vector3(0.99, 5.25, 3.95),
+    new Vector3(5, -0.68, 11.72),
+    new Vector3(-2.08, -0.36, 10.97)
 ];
 
 const BG_COLOR = 0x333333;
@@ -25,9 +25,9 @@ let windowWidth = window.innerWidth;
 let windowHeight = window.innerHeight;
 const dimension = {
     // for scene camera position
-    center: new THREE.Vector3(),
-    min: new THREE.Vector3(),
-    max: new THREE.Vector3()
+    center: new Vector3(),
+    min: new Vector3(),
+    max: new Vector3()
 };
 
 let progressController;
@@ -66,16 +66,16 @@ init();
 
 function init() {
 
-    renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer = new WebGLRenderer({ antialias: false });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(windowWidth, windowHeight);
     renderer.setClearColor(BG_COLOR, 1);
     document.body.appendChild(renderer.domElement);
 
-    scene = new THREE.Scene();
-    scene.add(new THREE.AmbientLight(0xf0f0f0, 3));
+    scene = new Scene();
+    scene.add(new AmbientLight(0xf0f0f0, 3));
 
-    camera = new THREE.PerspectiveCamera(70, windowWidth / windowHeight, 1, 1000);
+    camera = new PerspectiveCamera(70, windowWidth / windowHeight, 1, 1000);
 
     const { aspect, near, far, fov, show } = params;
     scene.add(camera);
@@ -84,12 +84,12 @@ function init() {
         renderer,
         scene,
         sceneCamera: camera,
-        cameraRef: new THREE.PerspectiveCamera(fov, aspect, near, far),
+        cameraRef: new PerspectiveCamera(fov, aspect, near, far),
         cameraState: { aspect, near, far, fov, showHelper: show },
         dimension
     });
     scene.add(trackEditor.camera);
-    trackEditor.setCameraHelper(new THREE.CameraHelper(trackEditor.camera));
+    trackEditor.setCameraHelper(new CameraHelper(trackEditor.camera));
     scene.add(trackEditor.cameraHelper);
 
     const getPreviewCameraState = () => ({
@@ -274,7 +274,7 @@ function init() {
 
     controls = new OrbitControls(camera, renderer.domElement);
 
-    trackEditor.setRaycaster(new THREE.Raycaster());
+    trackEditor.setRaycaster(new Raycaster());
     trackEditor.setTransformControl(new TransformControls(camera, renderer.domElement));
     scene.add(trackEditor.transformControl);
 
@@ -283,9 +283,9 @@ function init() {
             const model = gltf.scene;
             scene.add(model);
 
-            const box = new THREE.Box3();
+            const box = new Box3();
             box.setFromObject(model);
-            const size = box.getSize(new THREE.Vector3());
+            const size = box.getSize(new Vector3());
             const center = box.getCenter(controls.target);
 
             dimension.min = box.min;
@@ -300,7 +300,7 @@ function init() {
             controls.update();
 
             // illuminate the scene for better view
-            const light = new THREE.SpotLight(0xffffff, 4.5);
+            const light = new SpotLight(0xffffff, 4.5);
             light.position.set(center.x, 50 * center.y, center.z);
             light.lookAt(center.x, center.y, center.z);
             light.angle = Math.PI * 0.2;

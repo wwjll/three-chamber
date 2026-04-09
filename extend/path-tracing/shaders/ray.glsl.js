@@ -1,4 +1,4 @@
-export const Ray =  /* glsl */`
+const Ray =  /* glsl */`
     Ray createCameraRay() {
         vec2 pixelOffset = vec2((rand() - 0.5), (rand() - 0.5));
         vec2 uv = ((gl_FragCoord.xy + pixelOffset) / resolution) * 2.0 - 1.0;
@@ -34,3 +34,5 @@ export const Ray =  /* glsl */`
     }
 
 `
+
+export { Ray };

@@ -1,8 +1,6 @@
+import { Matrix4, Object3D } from 'three'
 
-import { Matrix4 } from 'three'
-import { Frame } from './Frame.js'
-
-export class Link extends Frame {
+class Link extends Object3D {
 
     constructor() {
         super();
@@ -47,3 +45,5 @@ export class Link extends Frame {
 
 
 }
+
+export { Link };

@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { Box3, BoxGeometry, BufferAttribute, BufferGeometry, CatmullRomCurve3, Group, Line, LineBasicMaterial, Mesh, MeshLambertMaterial, Vector2, Vector3 } from 'three';
 import * as TWEEN from '@tweenjs/tween.js/dist/tween.esm.js';
 
 const DEFAULT_CAMERA = {
@@ -77,47 +77,47 @@ class TrackEditor {
         this.clipSplinePoints = Array.isArray(options.clipSplinePoints) ? options.clipSplinePoints.slice() : [];
         this.controlSize = Number.isFinite(options.controlSize) ? options.controlSize : 0.5;
         this._ownsControlGroup = !options.controlGroup;
-        this.controlGroup = options.controlGroup || new THREE.Group();
+        this.controlGroup = options.controlGroup || new Group();
         if (this.scene && this.controlGroup.parent !== this.scene) {
             this.scene.add(this.controlGroup);
         }
         this._ownsControlGeometry = !options.controlGeometry;
-        this.controlGeometry = options.controlGeometry || new THREE.BoxGeometry(
+        this.controlGeometry = options.controlGeometry || new BoxGeometry(
             this.controlSize,
             this.controlSize,
             this.controlSize
         );
         this._ownsControlMaterial = !options.controlMaterial;
         const controlColor = Number.isFinite(options.controlColor) ? options.controlColor : Math.random() * 0xffffff;
-        this.controlMaterial = options.controlMaterial || new THREE.MeshLambertMaterial({ color: controlColor });
+        this.controlMaterial = options.controlMaterial || new MeshLambertMaterial({ color: controlColor });
         this.dimension = options.dimension || null;
 
         this.isAnimating = false;
         this.animationTask = null;
         this.animationRequestId = 0;
-        this._interactionPointer = new THREE.Vector2();
-        this._tmpCurvePosition = new THREE.Vector3();
-        this._tmpCurveTarget = new THREE.Vector3();
-        this._tmpCurveTangent = new THREE.Vector3();
+        this._interactionPointer = new Vector2();
+        this._tmpCurvePosition = new Vector3();
+        this._tmpCurveTarget = new Vector3();
+        this._tmpCurveTangent = new Vector3();
         this._interactionBindings = null;
         this._applyCameraState();
     }
 
     computeControlPoints(scene = this.scene, count = 4) {
         const fallback = [
-            new THREE.Vector3(-2, 1, -2),
-            new THREE.Vector3(2, 1, -2),
-            new THREE.Vector3(2, 1, 2),
-            new THREE.Vector3(-2, 1, 2)
+            new Vector3(-2, 1, -2),
+            new Vector3(2, 1, -2),
+            new Vector3(2, 1, 2),
+            new Vector3(-2, 1, 2)
         ];
 
         if (!scene || typeof scene.traverse !== 'function' || count <= 0) {
             return fallback.slice(0, Math.max(1, count)).map((p) => p.clone());
         }
 
-        const box = new THREE.Box3().setFromObject(scene);
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
+        const box = new Box3().setFromObject(scene);
+        const size = box.getSize(new Vector3());
+        const center = box.getCenter(new Vector3());
         const hasFiniteSize = Number.isFinite(size.x) && Number.isFinite(size.y) && Number.isFinite(size.z);
         const hasVolume = hasFiniteSize && (size.x > 0 || size.y > 0 || size.z > 0);
         if (!hasVolume) {
@@ -136,7 +136,7 @@ class TrackEditor {
             const t = (i / count) * Math.PI * 2;
             const jitter = (Math.random() - 0.5) * 0.4;
             const radiusScale = 0.7 + Math.random() * 0.6;
-            points.push(new THREE.Vector3(
+            points.push(new Vector3(
                 center.x + Math.cos(t + jitter) * rx * radiusScale,
                 center.y + (Math.random() - 0.5) * ry,
                 center.z + Math.sin(t + jitter) * rz * radiusScale
@@ -567,7 +567,7 @@ class TrackEditor {
             return null;
         }
 
-        const mesh = new THREE.Mesh(this.controlGeometry, this.controlMaterial);
+        const mesh = new Mesh(this.controlGeometry, this.controlMaterial);
         mesh.position.copy(point);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
@@ -598,7 +598,7 @@ class TrackEditor {
             return null;
         }
 
-        const randomPoint = new THREE.Vector3(
+        const randomPoint = new Vector3(
             Math.random() * size.x + min.x,
             Math.random() * size.y + center.y,
             Math.random() * size.z + min.z
@@ -640,15 +640,15 @@ class TrackEditor {
             }
         }
 
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(arcSegments * 3), 3));
+        const geometry = new BufferGeometry();
+        geometry.setAttribute('position', new BufferAttribute(new Float32Array(arcSegments * 3), 3));
 
         const createSpline = (curveType, color) => {
-            const curve = new THREE.CatmullRomCurve3(this.points);
+            const curve = new CatmullRomCurve3(this.points);
             curve.curveType = curveType;
-            curve.mesh = new THREE.Line(
+            curve.mesh = new Line(
                 geometry.clone(),
-                new THREE.LineBasicMaterial({ color, opacity: 0.35 })
+                new LineBasicMaterial({ color, opacity: 0.35 })
             );
             curve.mesh.castShadow = true;
             return curve;
@@ -714,7 +714,7 @@ class TrackEditor {
     updateSplineMesh(arcSegments = this.splineState.arcSegments) {
         const splines = this.splines || {};
         const nextSegments = Math.max(2, arcSegments | 0);
-        const point = new THREE.Vector3();
+        const point = new Vector3();
 
         for (const key in splines) {
             const spline = splines[key];
@@ -729,7 +729,7 @@ class TrackEditor {
             if (currentSegments !== nextSegments) {
                 geometry.setAttribute(
                     'position',
-                    new THREE.BufferAttribute(new Float32Array(nextSegments * 3), 3)
+                    new BufferAttribute(new Float32Array(nextSegments * 3), 3)
                 );
                 position = geometry.attributes.position;
             }
@@ -851,7 +851,7 @@ class TrackEditor {
 
         for (let i = 0; i < source.length; i++) {
             const p = source[i].position || source[i];
-            rows.push(`new THREE.Vector3(${p.x}, ${p.y}, ${p.z})`);
+            rows.push(`new Vector3(${p.x}, ${p.y}, ${p.z})`);
         }
 
         const output = `[${rows.join(',\n\t')}]`;
@@ -1165,5 +1165,4 @@ class TrackEditor {
     }
 }
 
-export { TrackEditor };
-export default TrackEditor
+export { TrackEditor, TrackEditor as default };

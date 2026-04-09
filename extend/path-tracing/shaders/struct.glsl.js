@@ -1,4 +1,4 @@
-export const Struct =  /* glsl */`
+const Struct =  /* glsl */`
     struct Triangle {
         vec3 p1, p2, p3;
         vec3 n1, n2, n3;
@@ -63,3 +63,5 @@ export const Struct =  /* glsl */`
         int size;
     };
 `
+
+export { Struct };

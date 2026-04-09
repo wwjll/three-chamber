@@ -37,7 +37,7 @@
  */
 import { Quaternion, Vector3 } from 'three';
 
-export class ChainSolver {
+class ChainSolver {
     constructor(options = {}) {
         this.targetPosition = options.targetPosition instanceof Vector3
             ? options.targetPosition.clone()
@@ -397,4 +397,4 @@ export class ChainSolver {
     }
 }
 
-export default ChainSolver;
+export { ChainSolver, ChainSolver as default };

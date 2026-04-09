@@ -1,4 +1,4 @@
-export const Material =  /* glsl */`
+const Material =  /* glsl */`
 
     Material Gold() {
         Material material;
@@ -87,3 +87,5 @@ export const Material =  /* glsl */`
         return material;
     }
 `
+
+export { Material };

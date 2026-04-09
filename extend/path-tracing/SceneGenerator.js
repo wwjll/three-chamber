@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { ClampToEdgeWrapping, Color, DataTexture, DoubleSide, FloatType, NearestFilter, NoColorSpace, RGBAFormat, Texture, Vector2, Vector3 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 
 import {
@@ -22,9 +22,9 @@ class Triangle {
         this.uv3 = uv3;
         this.materialIndex = materialIndex;
 
-        this.aa = new THREE.Vector3(Infinity, Infinity, Infinity);
-        this.bb = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
-        this.center = new THREE.Vector3(0, 0, 0);
+        this.aa = new Vector3(Infinity, Infinity, Infinity);
+        this.bb = new Vector3(-Infinity, -Infinity, -Infinity);
+        this.center = new Vector3(0, 0, 0);
 
         this.computeBoundingBox();
         this.computeCenteic();
@@ -40,7 +40,7 @@ class Triangle {
     }
 
     computeCenteic() {
-        this.center = new THREE.Vector3(
+        this.center = new Vector3(
             (this.p1.x + this.p2.x + this.p3.x) / 3,
             (this.p1.y + this.p2.y + this.p3.y) / 3,
             (this.p1.z + this.p2.z + this.p3.z) / 3
@@ -50,8 +50,8 @@ class Triangle {
 
 class BVHNode {
     constructor() {
-        this.aa = new THREE.Vector3(Infinity, Infinity, Infinity);
-        this.bb = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+        this.aa = new Vector3(Infinity, Infinity, Infinity);
+        this.bb = new Vector3(-Infinity, -Infinity, -Infinity);
         this.id = null;
         this.isLeaf = null;
         this.left = null;
@@ -90,45 +90,45 @@ class BVHBuilder {
         this.triangles = [];
         for (let i = 0; i < this.totalTriangles; ++i) {
             this.triangles.push(new Triangle(
-                new THREE.Vector3(
+                new Vector3(
                     this.position[9 * i],
                     this.position[9 * i + 1],
                     this.position[9 * i + 2]
                 ),
-                new THREE.Vector3(
+                new Vector3(
                     this.position[9 * i + 3],
                     this.position[9 * i + 4],
                     this.position[9 * i + 5]
                 ),
-                new THREE.Vector3(
+                new Vector3(
                     this.position[9 * i + 6],
                     this.position[9 * i + 7],
                     this.position[9 * i + 8]
                 ),
-                new THREE.Vector3(
+                new Vector3(
                     this.normal[9 * i],
                     this.normal[9 * i + 1],
                     this.normal[9 * i + 2]
                 ),
-                new THREE.Vector3(
+                new Vector3(
                     this.normal[9 * i + 3],
                     this.normal[9 * i + 4],
                     this.normal[9 * i + 5]
                 ),
-                new THREE.Vector3(
+                new Vector3(
                     this.normal[9 * i + 6],
                     this.normal[9 * i + 7],
                     this.normal[9 * i + 8]
                 ),
-                new THREE.Vector2(
+                new Vector2(
                     this.uv[6 * i],
                     this.uv[6 * i + 1],
                 ),
-                new THREE.Vector2(
+                new Vector2(
                     this.uv[6 * i + 2],
                     this.uv[6 * i + 3],
                 ),
-                new THREE.Vector2(
+                new Vector2(
                     this.uv[6 * i + 4],
                     this.uv[6 * i + 5],
                 ),
@@ -223,10 +223,10 @@ class BVHBuilder {
             let rightMax = [];
             // initialize left and right aabb box pairs
             for (let i = 0; i < right - left + 1; ++i) {
-                leftMin.push(new THREE.Vector3(Infinity, Infinity, Infinity));
-                rightMin.push(new THREE.Vector3(Infinity, Infinity, Infinity));
-                leftMax.push(new THREE.Vector3(-Infinity, -Infinity, -Infinity));
-                rightMax.push(new THREE.Vector3(-Infinity, -Infinity, -Infinity));
+                leftMin.push(new Vector3(Infinity, Infinity, Infinity));
+                rightMin.push(new Vector3(Infinity, Infinity, Infinity));
+                leftMax.push(new Vector3(-Infinity, -Infinity, -Infinity));
+                rightMax.push(new Vector3(-Infinity, -Infinity, -Infinity));
             }
             // calculate the all possible pair of leftAABB and rightAABB
             for (let i = left; i <= right; ++i) {
@@ -462,7 +462,7 @@ class BVHBuilder {
     }
 }
 
-export class SceneGenerator {
+class SceneGenerator {
 
     constructor(model, options = {}) {
         this.model = model;
@@ -627,20 +627,20 @@ export class SceneGenerator {
 
         }
 
-        const triangleDataTexture = new THREE.DataTexture(
+        const triangleDataTexture = new DataTexture(
             triangleArray,
             texelWidth,
             texelHeight,
-            THREE.RGBAFormat,
-            THREE.FloatType,
-            THREE.Texture.DEFAULT_MAPPING,
-            THREE.ClampToEdgeWrapping,
-            THREE.ClampToEdgeWrapping,
-            THREE.NearestFilter,
-            THREE.NearestFilter,
+            RGBAFormat,
+            FloatType,
+            Texture.DEFAULT_MAPPING,
+            ClampToEdgeWrapping,
+            ClampToEdgeWrapping,
+            NearestFilter,
+            NearestFilter,
             1
         );
-        triangleDataTexture.colorSpace = THREE.NoColorSpace;
+        triangleDataTexture.colorSpace = NoColorSpace;
         triangleDataTexture.flipY = false;
         triangleDataTexture.generateMipmaps = false;
         triangleDataTexture.needsUpdate = true;
@@ -654,8 +654,8 @@ export class SceneGenerator {
 
         for (let i = 0; i < this.materials.length; ++i) {
             const material = this.materials[i];
-            const color = material?.color || new THREE.Color(1, 1, 1);
-            const emissive = material?.emissive || new THREE.Color(0, 0, 0);
+            const color = material?.color || new Color(1, 1, 1);
+            const emissive = material?.emissive || new Color(0, 0, 0);
             const emissiveIntensity = material?.emissiveIntensity ?? 1.0;
             const alphaMode = material?.transparent ? 2.0 : ((material?.alphaTest ?? 0.0) > 0.0 ? 1.0 : 0.0);
             if (
@@ -686,26 +686,26 @@ export class SceneGenerator {
             materialArray[stride * i + 13] = material?.normalScale?.x ?? 1.0;
             materialArray[stride * i + 14] = material?.normalScale?.y ?? 1.0;
             materialArray[stride * i + 15] = alphaMode;
-            materialArray[stride * i + 16] = material?.side === THREE.DoubleSide ? 1.0 : 0.0;
+            materialArray[stride * i + 16] = material?.side === DoubleSide ? 1.0 : 0.0;
             materialArray[stride * i + 17] = 0.0;
             materialArray[stride * i + 18] = 0.0;
             materialArray[stride * i + 19] = 0.0;
         }
 
-        const materialDataTexture = new THREE.DataTexture(
+        const materialDataTexture = new DataTexture(
             materialArray,
             texelWidth,
             texelHeight,
-            THREE.RGBAFormat,
-            THREE.FloatType,
-            THREE.Texture.DEFAULT_MAPPING,
-            THREE.ClampToEdgeWrapping,
-            THREE.ClampToEdgeWrapping,
-            THREE.NearestFilter,
-            THREE.NearestFilter,
+            RGBAFormat,
+            FloatType,
+            Texture.DEFAULT_MAPPING,
+            ClampToEdgeWrapping,
+            ClampToEdgeWrapping,
+            NearestFilter,
+            NearestFilter,
             1
         );
-        materialDataTexture.colorSpace = THREE.NoColorSpace;
+        materialDataTexture.colorSpace = NoColorSpace;
         materialDataTexture.flipY = false;
         materialDataTexture.generateMipmaps = false;
         materialDataTexture.needsUpdate = true;
@@ -749,20 +749,20 @@ export class SceneGenerator {
         }
 
         // write nodes data into texture
-        const bvhDataTexture = new THREE.DataTexture(
+        const bvhDataTexture = new DataTexture(
             nodesArray,
             texelWidth,
             texelHeight,
-            THREE.RGBAFormat,
-            THREE.FloatType,
-            THREE.Texture.DEFAULT_MAPPING,
-            THREE.ClampToEdgeWrapping,
-            THREE.ClampToEdgeWrapping,
-            THREE.NearestFilter,
-            THREE.NearestFilter,
+            RGBAFormat,
+            FloatType,
+            Texture.DEFAULT_MAPPING,
+            ClampToEdgeWrapping,
+            ClampToEdgeWrapping,
+            NearestFilter,
+            NearestFilter,
             1
         );
-        bvhDataTexture.colorSpace = THREE.NoColorSpace;
+        bvhDataTexture.colorSpace = NoColorSpace;
         bvhDataTexture.flipY = false;
         bvhDataTexture.generateMipmaps = false;
         bvhDataTexture.needsUpdate = true;
@@ -791,3 +791,5 @@ export class SceneGenerator {
     }
 
 }
+
+export { SceneGenerator };

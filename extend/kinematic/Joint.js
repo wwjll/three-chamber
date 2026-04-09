@@ -1,10 +1,10 @@
 import {
     AxesHelper,
     Matrix4,
+    Object3D,
     Quaternion,
     Vector3,
 } from 'three';
-import { Frame } from './Frame.js';
 import { DOFHelper } from './Helper.js';
 
 const DEFAULT_JOINT_AXIS = new Vector3(0, 0, 1);
@@ -12,7 +12,7 @@ const _worldQuat = new Quaternion();
 const _localQuat = new Quaternion();
 const _localRot = new Matrix4();
 
-export class Joint extends Frame {
+class Joint extends Object3D {
 
     constructor(options = {}) {
 
@@ -181,3 +181,5 @@ export class Joint extends Frame {
 
 
 }
+
+export { Joint };

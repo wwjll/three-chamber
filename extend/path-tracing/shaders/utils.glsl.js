@@ -1,4 +1,4 @@
-export const Utils =  /* glsl */`
+const Utils =  /* glsl */`
     BVHNode getBVHNode(float i) {
         float width = bvhNodeDataTextureSize.x;
         // 3 slots
@@ -83,3 +83,5 @@ export const Utils =  /* glsl */`
         return material;
     }
 `
+
+export { Utils };

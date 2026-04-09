@@ -1,9 +1,14 @@
-import * as THREE from 'three';
+import { Color, GridHelper, Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, Quaternion, Scene, SphereGeometry, Vector3, WebGLRenderer } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { Pane } from 'tweakpane';
 import { getRenderLoopController } from '../extend/tools/Tool.js';
 import { Chain } from '../extend/kinematic/Chain.js';
+import {
+    createDhParametersFromJointState,
+    createInitialJointState,
+    kukaKr5ChainProfile,
+} from '../extend/kinematic/ChainController.js';
 import ChainSolver from '../extend/kinematic/ChainSolver.js';
 
 let scene, camera, renderer, controls, pane;
@@ -16,9 +21,9 @@ let isSolving = false;
 let isSyncingTarget = false;
 let isDraggingTarget = false;
 let pendingSolve = false;
-const pendingTarget = new THREE.Vector3();
-const pendingTargetQuat = new THREE.Quaternion();
-const tmpQuat = new THREE.Quaternion();
+const pendingTarget = new Vector3();
+const pendingTargetQuat = new Quaternion();
+const tmpQuat = new Quaternion();
 let solveActive = false;
 let targetTolerance = 1e-2;
 
@@ -67,25 +72,18 @@ const solverParams = {
     debug: true
 };
 
-const kukaKr5 = [
-    { theta: 0, axisSign: 1, thetaOffset: 0, d: 0.4, a: 0.18, alpha: 90, minAngle: -155, maxAngle: 155 },
-    { theta: 90, axisSign: -1, thetaOffset: 0, d: 0, a: 0.6, alpha: 0, minAngle: -180, maxAngle: 65 },
-    { theta: 0, axisSign: 1, thetaOffset: 0, d: 0, a: 0.12, alpha: 90, minAngle: -15, maxAngle: 158 },
-    { theta: 0, axisSign: 1, thetaOffset: 0, d: 0.62, a: 0, alpha: -90, minAngle: -350, maxAngle: 350 },
-    { theta: 0, axisSign: 1, thetaOffset: 0, d: 0, a: 0, alpha: 90, minAngle: -130, maxAngle: 130 },
-    { theta: 0, axisSign: 1, thetaOffset: 0, d: 0.115, a: 0, alpha: 0, minAngle: -350, maxAngle: 350 }
-];
+const kukaKr5Profile = kukaKr5ChainProfile;
 
 init();
 
 function init() {
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(BG_COLOR);
+    scene = new Scene();
+    scene.background = new Color(BG_COLOR);
 
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera = new PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(2, 2, 2);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer = new WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setClearColor(BG_COLOR, 1);
@@ -98,14 +96,14 @@ function init() {
         renderLoop.requestRender();
     });
 
-    const gridHelper = new THREE.GridHelper(20, 20);
+    const gridHelper = new GridHelper(20, 20);
     scene.add(gridHelper);
 
     chain = new Chain(scene);
     actuator = createActuator(scene, camera, renderer.domElement);
     chainSolver = new ChainSolver({
-        targetPosition: new THREE.Vector3(),
-        targetQuaternion: new THREE.Quaternion(),
+        targetPosition: new Vector3(),
+        targetQuaternion: new Quaternion(),
         chain,
         maxIter: solverParams.maxIter,
         alpha: solverParams.alpha,
@@ -234,14 +232,14 @@ function init() {
 }
 
 function createActuator(scene, camera, domElement) {
-    const object = new THREE.Object3D();
+    const object = new Object3D();
     object.name = 'actuator';
     object.matrixAutoUpdate = true;
     scene.add(object);
 
-    const sphere = new THREE.Mesh(
-        new THREE.SphereGeometry(0.04, 16, 16),
-        new THREE.MeshBasicMaterial({ color: 0xff4444 })
+    const sphere = new Mesh(
+        new SphereGeometry(0.04, 16, 16),
+        new MeshBasicMaterial({ color: 0xff4444 })
     );
     object.add(sphere);
 
@@ -254,7 +252,7 @@ function createActuator(scene, camera, domElement) {
     return {
         object,
         controls,
-        getWorldPosition(out = new THREE.Vector3()) {
+        getWorldPosition(out = new Vector3()) {
             if (object.parent) {
                 object.parent.updateMatrixWorld(true);
             } else {
@@ -262,7 +260,7 @@ function createActuator(scene, camera, domElement) {
             }
             return object.getWorldPosition(out);
         },
-        getWorldQuaternion(out = new THREE.Quaternion()) {
+        getWorldQuaternion(out = new Quaternion()) {
             if (object.parent) {
                 object.parent.updateMatrixWorld(true);
             } else {
@@ -280,8 +278,8 @@ function createActuator(scene, camera, domElement) {
 }
 
 function buildKuka() {
-    qCurrent = kukaKr5.map((segment) => THREE.MathUtils.degToRad(Number.isFinite(segment.theta) ? segment.theta : 0));
-    chain.update(getDhParametersFromQ(qCurrent), styleParams, baseParams);
+    qCurrent = createInitialJointState(kukaKr5Profile);
+    chain.update(createDhParametersFromJointState(qCurrent, kukaKr5Profile), styleParams, baseParams);
     attachActuator();
     updateActuator();
     if (chainSolver) chainSolver.joints = chain.joints;
@@ -289,46 +287,11 @@ function buildKuka() {
 }
 
 function updateArm() {
-    chain.update(getDhParametersFromQ(qCurrent), styleParams, baseParams);
+    chain.update(createDhParametersFromJointState(qCurrent, kukaKr5Profile), styleParams, baseParams);
     attachActuator();
     updateActuator();
     if (chainSolver) chainSolver.joints = chain.joints;
     renderLoop.requestRender();
-}
-
-function getDhParametersFromQ(q) {
-    return kukaKr5.map((segment, index) => {
-        const theta = Number.isFinite(q[index]) ? q[index] : 0;
-        const axisSign = segment.axisSign === -1 ? -1 : 1;
-        const thetaOffsetDeg = Number.isFinite(segment.thetaOffset) ? segment.thetaOffset : 0;
-        const thetaOffset = THREE.MathUtils.degToRad(thetaOffsetDeg);
-        const d = segment.d;
-        const a = segment.a;
-        const alpha = THREE.MathUtils.degToRad(segment.alpha);
-        const [minDhDeg, maxDhDeg] = convertAxisLimitsToDh(segment, axisSign, thetaOffsetDeg);
-        return [theta, d, a, alpha, thetaOffset, minDhDeg, maxDhDeg];
-    });
-}
-
-function convertAxisLimitsToDh(segment, axisSign, thetaOffsetDeg) {
-    // Convert controller/axis-space limits to DH-space limits.
-    // If the source interval is wrap-around (min > max), keep wrap semantics.
-    const minAxisDeg = Number.isFinite(segment.minAngle) ? segment.minAngle : -185;
-    const maxAxisDeg = Number.isFinite(segment.maxAngle) ? segment.maxAngle : 185;
-    const isWrap = minAxisDeg > maxAxisDeg;
-
-    const mappedMin = axisSign * minAxisDeg + thetaOffsetDeg;
-    const mappedMax = axisSign * maxAxisDeg + thetaOffsetDeg;
-
-    if (!isWrap) {
-        return mappedMin <= mappedMax
-            ? [mappedMin, mappedMax]
-            : [mappedMax, mappedMin];
-    }
-
-    return axisSign === 1
-        ? [mappedMin, mappedMax]
-        : [mappedMax, mappedMin];
 }
 
 function attachActuator() {
@@ -341,7 +304,7 @@ function attachActuator() {
 function updateActuator() {
     if (!chain.roboticArm) return;
     const actuatorLocalPosition = chain.getActuatorLocalPosition();
-    const actuatorLocalQuaternion = chain.getActuatorLocalQuaternion(new THREE.Quaternion());
+    const actuatorLocalQuaternion = chain.getActuatorLocalQuaternion(new Quaternion());
     if (actuatorLocalPosition) {
         isSyncingTarget = true;
         try {
@@ -379,7 +342,7 @@ function solveIfPending() {
     isSolving = true;
     try {
         qCurrent = chainSolver.solve(qCurrent);
-        chain.update(getDhParametersFromQ(qCurrent), styleParams, baseParams);
+        chain.update(createDhParametersFromJointState(qCurrent, kukaKr5Profile), styleParams, baseParams);
         attachActuator();
         chainSolver.joints = chain.joints;
     } finally {

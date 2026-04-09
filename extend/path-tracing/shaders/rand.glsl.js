@@ -1,4 +1,4 @@
-export const Rand =  /* glsl */`
+const Rand =  /* glsl */`
     uint updateSeed(float width, float height, float samples) {
         return uint(uint((pos.x * 0.5 + 0.5) * (width)) * uint(1973) +
         uint((pos.y * 0.5 + 0.5) * (height)) * uint(9277) +
@@ -19,3 +19,5 @@ export const Rand =  /* glsl */`
     }
   
 `
+
+export { Rand };

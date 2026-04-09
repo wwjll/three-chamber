@@ -1,5 +1,5 @@
 import { MaterialBase } from '../materials/MaterialBase'
-import * as THREE from 'three';
+import { GLSL3, Vector2 } from 'three';
 
 import { Struct } from '../shaders/struct.glsl'
 import { Material } from '../shaders/material.glsl'
@@ -12,11 +12,11 @@ import { Brdf } from '../shaders/brdf.glsl'
 import { Sample } from '../shaders/sample.glsl'
 import { Common } from '../shaders/common.glsl'
 
-export class PathTracingMaterial extends MaterialBase {
+class PathTracingMaterial extends MaterialBase {
     constructor() {
         super({
 
-            glslVersion: THREE.GLSL3,
+            glslVersion: GLSL3,
 
             defines: {
                 ENABLE_ENV_MISS_MIS: 1,
@@ -157,7 +157,9 @@ export class PathTracingMaterial extends MaterialBase {
             `
         })
 
-        this.uniforms.hdrResolution.value = new THREE.Vector2(1, 1);
-        this.uniforms.materialDataTextureSize.value = new THREE.Vector2(1, 1);
+        this.uniforms.hdrResolution.value = new Vector2(1, 1);
+        this.uniforms.materialDataTextureSize.value = new Vector2(1, 1);
     }
 }
+
+export { PathTracingMaterial };

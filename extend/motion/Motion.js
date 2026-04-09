@@ -346,8 +346,4 @@ class TowerMotionController {
     }
 }
 
-export {
-    TowerMotionController
-};
-
-export default TowerMotionController;
+export { TowerMotionController, TowerMotionController as default };

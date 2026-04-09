@@ -1,4 +1,4 @@
-export const Common =  /* glsl */`
+const Common =  /* glsl */`
     #define MAX_BOUNCE_LOOP 8
     #define MAX_SAMPLE_CONTRIBUTION 10.0
     #define MAX_THROUGHPUT_LUMINANCE 8.0
@@ -335,3 +335,5 @@ export const Common =  /* glsl */`
         pc_fragColor = vec4(mix(accumulatedRadiance, sampleRadiance, accumulationWeight), 1.0);
     }
 `
+
+export { Common };

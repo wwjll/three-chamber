@@ -1,5 +1,5 @@
 
-import * as THREE from 'three';
+import { AmbientLight, Color, DirectionalLight, Mesh, PerspectiveCamera, Scene, ShaderMaterial, SphereGeometry, TextureLoader, Vector3, WebGLRenderer } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Pane } from 'tweakpane';
 import Stats from 'three/examples/jsm/libs/stats.module.js';
@@ -33,7 +33,7 @@ init();
 function initThree() {
     let width = window.innerWidth;
     let height = window.innerHeight;
-    renderer = new THREE.WebGLRenderer({
+    renderer = new WebGLRenderer({
         antialias: true
     });
     renderer.setSize(width, height);
@@ -42,17 +42,17 @@ function initThree() {
 
     let near = 0.1;
     let far = 10000;
-    camera = new THREE.PerspectiveCamera(80, width / height, near, far);
+    camera = new PerspectiveCamera(80, width / height, near, far);
     camera.position.set(0, 200, 0);
     camera.up.set(0, 1, 0);
     controller = new OrbitControls(camera, renderer.domElement);
-    controller.target = new THREE.Vector3(0, 0, 0);
+    controller.target = new Vector3(0, 0, 0);
     controller.update();
     controller.addEventListener('change', () => {
         renderLoop.requestRender();
     });
 
-    loader = new THREE.TextureLoader();
+    loader = new TextureLoader();
 
     pane = new Pane({ title: 'HeightWarp' });
     pane.addBinding(options, 'factor', { min: 0, max: 50, step: 0.1 }).on('change', (ev) => {
@@ -82,17 +82,17 @@ function initThree() {
 }
 
 function initScene() {
-    scene = new THREE.Scene();
+    scene = new Scene();
 
-    let ambientLight = new THREE.AmbientLight(0xfefefe);
-    let directionLight = new THREE.DirectionalLight(0xffffff);
+    let ambientLight = new AmbientLight(0xfefefe);
+    let directionLight = new DirectionalLight(0xffffff);
     directionLight.position.set(0, 5, 0);
     directionLight.intensity = 2;
     scene.add(ambientLight);
     scene.add(directionLight);
 
-    geometry = new THREE.SphereGeometry(options.radius, options.segments, options.segments);
-    material = new THREE.ShaderMaterial({
+    geometry = new SphereGeometry(options.radius, options.segments, options.segments);
+    material = new ShaderMaterial({
         uniforms: {
             u_radius: {
                 value: options.radius
@@ -108,14 +108,14 @@ function initScene() {
                 value: loader.load(options.bump)
             },
             u_color: {
-                value: new THREE.Color('rgb(255, 255, 255)')
+                value: new Color('rgb(255, 255, 255)')
             },
         },
         transparent: true,
         vertexShader: HEIGHT_WARP_VERTEX,
         fragmentShader: HEIGHT_WARP_FRAGMENT,
     });
-    mesh = new THREE.Mesh(geometry, material);
+    mesh = new Mesh(geometry, material);
     scene.add(mesh);
 }
 

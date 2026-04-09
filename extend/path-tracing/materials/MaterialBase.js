@@ -1,6 +1,6 @@
 import { ShaderMaterial } from 'three';
 
-export class MaterialBase extends ShaderMaterial {
+class MaterialBase extends ShaderMaterial {
 
     set needsUpdate(v) {
 
@@ -40,3 +40,5 @@ export class MaterialBase extends ShaderMaterial {
     }
 
 }
+
+export { MaterialBase };

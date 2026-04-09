@@ -107,4 +107,4 @@ class RenderLoopController {
     }
 }
 
-export default RenderLoopController;
+export { RenderLoopController as default };

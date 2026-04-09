@@ -1,6 +1,6 @@
 import { MaterialBase } from '../materials/MaterialBase'
 
-export class OutputMaterial extends MaterialBase {
+class OutputMaterial extends MaterialBase {
     constructor(target, width, height) {
         super({
 
@@ -40,3 +40,5 @@ export class OutputMaterial extends MaterialBase {
         })
     }
 }
+
+export { OutputMaterial };

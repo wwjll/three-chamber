@@ -1,4 +1,4 @@
-export const Brdf =  /* glsl */`
+const Brdf =  /* glsl */`
 
     float SchlickFresnel(float u) {
         float m = clamp(1.0 - u, 0.0, 1.0);
@@ -153,3 +153,5 @@ export const Brdf =  /* glsl */`
     
     }
 `
+
+export { Brdf };

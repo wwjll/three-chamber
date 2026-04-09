@@ -1,4 +1,4 @@
-export const Math =  /* glsl */`
+const Math =  /* glsl */`
     float sqr(float x) {
         return x * x;
     }
@@ -11,3 +11,5 @@ export const Math =  /* glsl */`
         tangent = normalize(cross(N, bitangent));
     }
 `
+
+export { Math };

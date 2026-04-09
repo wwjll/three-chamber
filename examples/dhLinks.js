@@ -1,9 +1,9 @@
-import * as THREE from 'three';
+import { GridHelper, MathUtils, PerspectiveCamera, Scene, WebGLRenderer } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Pane } from 'tweakpane';
 import { getRenderLoopController } from '../extend/tools/Tool.js';
 import { Chain } from '../extend/kinematic/Chain.js';
-import { ConvertDH, ConvertMDH } from '../extend/kinematic/Utils.js';
+import { convertDH, convertMDH } from '../extend/kinematic/ChainGenerator.js';
 
 let scene, camera, renderer, controls, pane;
 let createFolder, armsFolder, styleFolder;
@@ -214,6 +214,18 @@ function convertAxisLimitsToDh(segment) {
         : [mappedMax, mappedMin];
 }
 
+function createDhParametersFromSegments(segments) {
+    return segments.map((segment) => {
+        const theta = MathUtils.degToRad(segment.theta);
+        const thetaOffset = MathUtils.degToRad(segment.thetaOffset ?? 0);
+        const d = segment.d;
+        const a = segment.a;
+        const alpha = MathUtils.degToRad(segment.alpha);
+        const [minDhDeg, maxDhDeg] = convertAxisLimitsToDh(segment);
+        return [theta, d, a, alpha, thetaOffset, minDhDeg, maxDhDeg, segment.axisSign === -1 ? -1 : 1];
+    });
+}
+
 const presets = {
     'TEST': {
         segments: [
@@ -270,7 +282,7 @@ function loadPreset(name) {
     ]);
     if (baseParams.mdhMode) {
         baseParams.useConvertedParams = true;
-        rebuildSegmentsFromArray(ConvertMDH(paramsArray));
+        rebuildSegmentsFromArray(convertMDH(paramsArray));
     } else {
         baseParams.useConvertedParams = false;
         rebuildSegmentsFromArray(paramsArray);
@@ -287,12 +299,12 @@ const demoParams = {
 init();
 
 function init() {
-    scene = new THREE.Scene();
+    scene = new Scene();
 
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera = new PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(2, 2, 2);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer = new WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setClearColor(BG_COLOR, 1);
@@ -305,7 +317,7 @@ function init() {
         renderLoop.requestRender();
     });
 
-    const gridHelper = new THREE.GridHelper(20, 20);
+    const gridHelper = new GridHelper(20, 20);
     scene.add(gridHelper);
 
     chain = new Chain(scene);
@@ -351,7 +363,7 @@ function init() {
         if (ev.last === false) return;
         const value = ev.value;
         const params = segmentsToParamArray(createParams.armSegments);
-        const converted = value ? ConvertMDH(params) : ConvertDH(params);
+        const converted = value ? convertMDH(params) : convertDH(params);
         baseParams.useConvertedParams = value;
         rebuildSegmentsFromArray(converted);
     });
@@ -428,15 +440,7 @@ function init() {
 
 function updateArm() {
     if (suppressUpdate) return;
-    const dhParameters = createParams.armSegments.map(segment => {
-        const theta = THREE.MathUtils.degToRad(segment.theta);
-        const thetaOffset = THREE.MathUtils.degToRad(segment.thetaOffset ?? 0);
-        const d = segment.d;
-        const a = segment.a;
-        const alpha = THREE.MathUtils.degToRad(segment.alpha);
-        const [minDhDeg, maxDhDeg] = convertAxisLimitsToDh(segment);
-        return [theta, d, a, alpha, thetaOffset, minDhDeg, maxDhDeg, segment.axisSign === -1 ? -1 : 1];
-    });
+    const dhParameters = createDhParametersFromSegments(createParams.armSegments);
     chain.update(dhParameters, styleParams, baseParams);
     renderLoop.requestRender();
 }

@@ -1,4 +1,4 @@
-export const Sample =  /* glsl */`
+const Sample =  /* glsl */`
     #define MAX_ENV_CDF_BINARY_SEARCH_STEPS 12
 
     vec3 SampleHemisphere() {
@@ -161,3 +161,5 @@ export const Sample =  /* glsl */`
     }
 
 `
+
+export { Sample };

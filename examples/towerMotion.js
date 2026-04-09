@@ -1,18 +1,18 @@
-import * as THREE from 'three';
+import { AmbientLight, Box3, PerspectiveCamera, Scene, SpotLight, Vector3, WebGLRenderer } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
 import Stats from 'three/examples/jsm/libs/stats.module.js';
+import { Pane } from 'tweakpane';
 
 import { getAssetURL, getRenderLoopController } from '/extend/tools/Tool.js';
 import { TowerMotionController } from '/extend/motion/Motion.js';
 
 const assetUrl = getAssetURL();
-const modelUrl = assetUrl + 'models/floors.glb';
+const modelUrl = assetUrl + 'models/scenes/floors.glb';
 const renderLoop = getRenderLoopController();
 
 let camera, scene, renderer, controls;
-let stats, gui;
+let stats, pane;
 
 const BG_COLOR = 0x333333;
 const FRAME_RATE = 30;
@@ -21,9 +21,9 @@ const FRAME_DURATION = 1 / FRAME_RATE;
 let windwoWidth = window.innerWidth;
 let windowHeight = window.innerHeight;
 const dimension = {
-    center: new THREE.Vector3(),
-    min: new THREE.Vector3(),
-    max: new THREE.Vector3()
+    center: new Vector3(),
+    min: new Vector3(),
+    max: new Vector3()
 };
 
 let floors = [];
@@ -44,16 +44,16 @@ const params = {
 init();
 
 function init() {
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer = new WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(windwoWidth, windowHeight);
     renderer.setClearColor(BG_COLOR, 1);
 
     document.body.appendChild(renderer.domElement);
-    scene = new THREE.Scene();
-    scene.add(new THREE.AmbientLight(0xf0f0f0, 3));
+    scene = new Scene();
+    scene.add(new AmbientLight(0xf0f0f0, 3));
 
-    camera = new THREE.PerspectiveCamera(70, windwoWidth / windowHeight, 1, 10000);
+    camera = new PerspectiveCamera(70, windwoWidth / windowHeight, 1, 10000);
     scene.add(camera);
 
     controls = new OrbitControls(camera, renderer.domElement);
@@ -101,10 +101,10 @@ function init() {
 
             scene.add(model);
 
-            const box = new THREE.Box3();
+            const box = new Box3();
             box.setFromObject(model);
-            const size = box.getSize(new THREE.Vector3());
-            const target = new THREE.Vector3();
+            const size = box.getSize(new Vector3());
+            const target = new Vector3();
             const center = box.getCenter(target);
             controls.target = target;
 
@@ -119,7 +119,7 @@ function init() {
             camera.updateProjectionMatrix();
             controls.update();
 
-            const light = new THREE.SpotLight(0xf0f0f0, 2);
+            const light = new SpotLight(0xf0f0f0, 2);
             light.position.copy(camera.position);
             light.position.y += 2 * size.y;
             light.lookAt(target.x, target.y, target.z);
@@ -147,40 +147,59 @@ function init() {
 }
 
 function initGUI() {
-    gui = new GUI();
     const operableLevels = motionController.getOperableLevels();
     const defaultLevel = operableLevels.length > 0
         ? operableLevels[operableLevels.length - 1]
         : 0;
+    const levelParams = {
+        level: defaultLevel,
+    };
+    const levelOptions = Object.fromEntries(
+        (operableLevels.length > 0 ? operableLevels : [defaultLevel]).map((level) => [String(level), level])
+    );
 
-    gui.add(params, 'reset').name('Reset');
-    gui.add(params, 'distance', 100, 3000).step(10).onChange((v) => {
-        motionController.setConfig({ distance: v });
-    });
-    gui.add(params, 'duration', 0.1, 10).step(0.05).name('duration(s)').onChange((v) => {
-        motionController.setConfig({ duration: v });
-    });
-    gui.add(params, 'easingName', easingNames).onChange((v) => {
-        motionController.setConfig({ easingName: v });
-    });
-    gui.add(params, 'easingType', ['In', 'InOut', 'Out']).onChange((v) => {
-        motionController.setConfig({ easingType: v });
-    });
-    gui.add(params, 'renderOnIdle').name('render On Idle').onChange((v) => {
-        renderLoop.setRenderOnIdle(v);
-    });
+    pane = new Pane({ title: 'Tower Motion' });
 
-    gui.add({ level: defaultLevel }, 'level', operableLevels.length > 0 ? operableLevels : [defaultLevel])
-        .name('toggle level')
-        .onChange((v) => {
-            if (motionController.isAnimating()) {
-                console.log('Floors is animating!');
-                return;
-            }
+    const actionFolder = pane.addFolder({ title: 'Action' });
+    actionFolder.addButton({ title: 'Reset' }).on('click', () => {
+        reset();
+    });
+    actionFolder.expanded = true;
 
-            motionController.moveToLevel(v, { queue: false });
-            renderLoop.requestRender();
-        });
+    const motionFolder = pane.addFolder({ title: 'Motion' });
+    motionFolder.addBinding(params, 'distance', { min: 100, max: 3000, step: 10, label: 'Distance' }).on('change', (ev) => {
+        motionController.setConfig({ distance: ev.value });
+        renderLoop.requestRender();
+    });
+    motionFolder.addBinding(params, 'duration', { min: 0.1, max: 10, step: 0.05, label: 'Duration (s)' }).on('change', (ev) => {
+        motionController.setConfig({ duration: ev.value });
+        renderLoop.requestRender();
+    });
+    motionFolder.addBinding(params, 'easingName', { label: 'Easing', options: Object.fromEntries(easingNames.map((name) => [name, name])) }).on('change', (ev) => {
+        motionController.setConfig({ easingName: ev.value });
+    });
+    motionFolder.addBinding(params, 'easingType', { label: 'Type', options: { In: 'In', InOut: 'InOut', Out: 'Out' } }).on('change', (ev) => {
+        motionController.setConfig({ easingType: ev.value });
+    });
+    motionFolder.expanded = true;
+
+    const renderFolder = pane.addFolder({ title: 'Render' });
+    renderFolder.addBinding(params, 'renderOnIdle', { label: 'Render On Idle' }).on('change', (ev) => {
+        renderLoop.setRenderOnIdle(ev.value);
+    });
+    renderFolder.expanded = true;
+
+    const floorFolder = pane.addFolder({ title: 'Floors' });
+    floorFolder.addBinding(levelParams, 'level', { label: 'Toggle Level', options: levelOptions }).on('change', (ev) => {
+        if (motionController.isAnimating()) {
+            console.log('Floors is animating!');
+            return;
+        }
+
+        motionController.moveToLevel(ev.value, { queue: false });
+        renderLoop.requestRender();
+    });
+    floorFolder.expanded = true;
 }
 
 function renderFrame(deltaSec = FRAME_DURATION) {

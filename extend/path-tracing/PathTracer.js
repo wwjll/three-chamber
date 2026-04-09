@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { ClampToEdgeWrapping, Color, DataArrayTexture, DataTexture, FloatType, LinearFilter, Mesh, NearestFilter, NoColorSpace, PlaneGeometry, RGBAFormat, RepeatWrapping, SRGBColorSpace, UnsignedByteType, Vector2, WebGLRenderTarget } from 'three';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { OutputMaterial } from './materials/OutputMaterial'
 import { PathTracingMaterial } from './materials/PathTracingMaterial'
@@ -87,33 +87,33 @@ function buildHdrImportanceDistribution(texture) {
         marginalData[y * 4] = totalWeight > 0 ? marginalCdf / totalWeight : (y + 1) / height;
     }
 
-    const conditionalTexture = new THREE.DataTexture(
+    const conditionalTexture = new DataTexture(
         conditionalData,
         width,
         height,
-        THREE.RGBAFormat,
-        THREE.FloatType
+        RGBAFormat,
+        FloatType
     );
-    conditionalTexture.colorSpace = THREE.NoColorSpace;
-    conditionalTexture.minFilter = THREE.NearestFilter;
-    conditionalTexture.magFilter = THREE.NearestFilter;
-    conditionalTexture.wrapS = THREE.ClampToEdgeWrapping;
-    conditionalTexture.wrapT = THREE.ClampToEdgeWrapping;
+    conditionalTexture.colorSpace = NoColorSpace;
+    conditionalTexture.minFilter = NearestFilter;
+    conditionalTexture.magFilter = NearestFilter;
+    conditionalTexture.wrapS = ClampToEdgeWrapping;
+    conditionalTexture.wrapT = ClampToEdgeWrapping;
     conditionalTexture.generateMipmaps = false;
     conditionalTexture.needsUpdate = true;
 
-    const marginalTexture = new THREE.DataTexture(
+    const marginalTexture = new DataTexture(
         marginalData,
         height,
         1,
-        THREE.RGBAFormat,
-        THREE.FloatType
+        RGBAFormat,
+        FloatType
     );
-    marginalTexture.colorSpace = THREE.NoColorSpace;
-    marginalTexture.minFilter = THREE.NearestFilter;
-    marginalTexture.magFilter = THREE.NearestFilter;
-    marginalTexture.wrapS = THREE.ClampToEdgeWrapping;
-    marginalTexture.wrapT = THREE.ClampToEdgeWrapping;
+    marginalTexture.colorSpace = NoColorSpace;
+    marginalTexture.minFilter = NearestFilter;
+    marginalTexture.magFilter = NearestFilter;
+    marginalTexture.wrapS = ClampToEdgeWrapping;
+    marginalTexture.wrapT = ClampToEdgeWrapping;
     marginalTexture.generateMipmaps = false;
     marginalTexture.needsUpdate = true;
 
@@ -172,13 +172,13 @@ function buildTextureArray(textures, colorSpace, fallbackRgba) {
     const layers = validTextures.length;
 
     if (layers === 0) {
-        const texture = new THREE.DataArrayTexture(createFallbackLayer(fallbackRgba), 1, 1, 1);
-        texture.format = THREE.RGBAFormat;
-        texture.type = THREE.UnsignedByteType;
-        texture.minFilter = THREE.LinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-        texture.wrapS = THREE.ClampToEdgeWrapping;
-        texture.wrapT = THREE.ClampToEdgeWrapping;
+        const texture = new DataArrayTexture(createFallbackLayer(fallbackRgba), 1, 1, 1);
+        texture.format = RGBAFormat;
+        texture.type = UnsignedByteType;
+        texture.minFilter = LinearFilter;
+        texture.magFilter = LinearFilter;
+        texture.wrapS = ClampToEdgeWrapping;
+        texture.wrapT = ClampToEdgeWrapping;
         texture.generateMipmaps = false;
         texture.colorSpace = colorSpace;
         texture.needsUpdate = true;
@@ -207,20 +207,20 @@ function buildTextureArray(textures, colorSpace, fallbackRgba) {
         data.set(layerData, layerIndex * layerSize);
     });
 
-    const texture = new THREE.DataArrayTexture(data, width, height, layers);
-    texture.format = THREE.RGBAFormat;
-    texture.type = THREE.UnsignedByteType;
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
+    const texture = new DataArrayTexture(data, width, height, layers);
+    texture.format = RGBAFormat;
+    texture.type = UnsignedByteType;
+    texture.minFilter = LinearFilter;
+    texture.magFilter = LinearFilter;
+    texture.wrapS = RepeatWrapping;
+    texture.wrapT = RepeatWrapping;
     texture.generateMipmaps = false;
     texture.colorSpace = colorSpace;
     texture.needsUpdate = true;
     return texture;
 }
 
-export class PathTracer {
+class PathTracer {
 
     constructor(renderer, scene, camera) {
 
@@ -234,22 +234,22 @@ export class PathTracer {
 
     init() {
 
-        this.outRenderTarget = new THREE.WebGLRenderTarget(1, 1, {
-            format: THREE.RGBAFormat,
-            type: THREE.FloatType,
-            magFilter: THREE.NearestFilter,
-            minFilter: THREE.NearestFilter
+        this.outRenderTarget = new WebGLRenderTarget(1, 1, {
+            format: RGBAFormat,
+            type: FloatType,
+            magFilter: NearestFilter,
+            minFilter: NearestFilter
         });
 
-        this.traceRenderTarget = new THREE.WebGLRenderTarget(1, 1, {
-            format: THREE.RGBAFormat,
-            type: THREE.FloatType,
-            magFilter: THREE.NearestFilter,
-            minFilter: THREE.NearestFilter
+        this.traceRenderTarget = new WebGLRenderTarget(1, 1, {
+            format: RGBAFormat,
+            type: FloatType,
+            magFilter: NearestFilter,
+            minFilter: NearestFilter
         });
 
-        this.pathTracingQuad = new THREE.Mesh(
-            new THREE.PlaneGeometry(2, 2),
+        this.pathTracingQuad = new Mesh(
+            new PlaneGeometry(2, 2),
             new PathTracingMaterial()
         );
         this.pathTracingQuad.frustumCulled = false;
@@ -314,25 +314,25 @@ export class PathTracer {
         this.pathTracingMaterial.sceneAlbedoTextureArray = this._assignSceneTextureArray(
             'albedo',
             textures?.albedo,
-            THREE.SRGBColorSpace,
+            SRGBColorSpace,
             [255, 255, 255, 255]
         );
         this.pathTracingMaterial.sceneNormalTextureArray = this._assignSceneTextureArray(
             'normal',
             textures?.normal,
-            THREE.NoColorSpace,
+            NoColorSpace,
             [128, 128, 255, 255]
         );
         this.pathTracingMaterial.sceneMetallicRoughnessTextureArray = this._assignSceneTextureArray(
             'metallicRoughness',
             textures?.metallicRoughness,
-            THREE.NoColorSpace,
+            NoColorSpace,
             [255, 255, 255, 255]
         );
         this.pathTracingMaterial.sceneEmissiveTextureArray = this._assignSceneTextureArray(
             'emissive',
             textures?.emissive,
-            THREE.SRGBColorSpace,
+            SRGBColorSpace,
             [255, 255, 255, 255]
         );
     }
@@ -392,8 +392,8 @@ export class PathTracer {
 
     // set hdr texture
     setHdrTexture(texture) {
-        texture.minFilter = THREE.LinearFilter;
-        texture.magFilter = THREE.LinearFilter;
+        texture.minFilter = LinearFilter;
+        texture.magFilter = LinearFilter;
         texture.generateMipmaps = false;
         this.pathTracingMaterial.hdrTexture = texture;
 
@@ -410,7 +410,7 @@ export class PathTracer {
         if (!hdrDistribution) {
             this.pathTracingMaterial.hdrConditionalDistributionTexture = null;
             this.pathTracingMaterial.hdrMarginalDistributionTexture = null;
-            this.pathTracingMaterial.hdrResolution = new THREE.Vector2(1, 1);
+            this.pathTracingMaterial.hdrResolution = new Vector2(1, 1);
             this.pathTracingMaterial.hdrTotalWeight = 0;
             return;
         }
@@ -419,7 +419,7 @@ export class PathTracer {
         this.hdrMarginalDistributionTexture = hdrDistribution.marginalTexture;
         this.pathTracingMaterial.hdrConditionalDistributionTexture = this.hdrConditionalDistributionTexture;
         this.pathTracingMaterial.hdrMarginalDistributionTexture = this.hdrMarginalDistributionTexture;
-        this.pathTracingMaterial.hdrResolution = new THREE.Vector2(hdrDistribution.width, hdrDistribution.height);
+        this.pathTracingMaterial.hdrResolution = new Vector2(hdrDistribution.width, hdrDistribution.height);
         this.pathTracingMaterial.hdrTotalWeight = hdrDistribution.totalWeight;
     }
 
@@ -494,7 +494,7 @@ export class PathTracer {
 
     reset() {
         const currentRenderTarget = this.renderer.getRenderTarget();
-        const clearColor = this.renderer.getClearColor(new THREE.Color());
+        const clearColor = this.renderer.getClearColor(new Color());
         const clearAlpha = this.renderer.getClearAlpha();
 
         this.samples = 0;
@@ -512,3 +512,5 @@ export class PathTracer {
     }
 
 }
+
+export { PathTracer };

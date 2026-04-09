@@ -1,4 +1,4 @@
-export const HEIGHT_WARP_VERTEX = /* glsl */ `
+const HEIGHT_WARP_VERTEX = /* glsl */ `
 varying vec4 v_color;
 varying vec2 v_uv;
 uniform float u_factor;
@@ -14,7 +14,7 @@ void main() {
 }
 `;
 
-export const HEIGHT_WARP_FRAGMENT = /* glsl */ `
+const HEIGHT_WARP_FRAGMENT = /* glsl */ `
 uniform vec3 u_color;
 varying vec2 v_uv;
 uniform sampler2D u_map;
@@ -22,3 +22,5 @@ void main() {
     gl_FragColor = vec4(u_color, 1.0) * texture2D(u_map, v_uv);
 }
 `;
+
+export { HEIGHT_WARP_VERTEX, HEIGHT_WARP_FRAGMENT };

@@ -76,7 +76,7 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
     [Preview](https://wwjll.github.io/three-chamber/towerMotion.html)
 
-    ![TowerMotion](./assets/docs/TowerMotion.gif)
+    ![TowerMotion](./assets/docs/TowerMotion.png)
     
 # Visual Effects
 

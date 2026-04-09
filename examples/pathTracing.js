@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { Box3, Clock, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -120,9 +120,9 @@ function modelHasAlbedoTexture(model) {
 }
 
 function fitCameraToObject(object3D) {
-    const box = new THREE.Box3().setFromObject(object3D);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
+    const box = new Box3().setFromObject(object3D);
+    const center = box.getCenter(new Vector3());
+    const size = box.getSize(new Vector3());
     const maxSize = Math.max(size.x, size.y, size.z);
     const safeDistance = Math.max(maxSize * 1.8, 1.0);
 
@@ -216,7 +216,7 @@ async function loadSceneAssets() {
 
 async function init() {
 
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer = new WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setClearColor(BG_COLOR, 1);
     renderer.setPixelRatio(1);
@@ -226,12 +226,12 @@ async function init() {
     const WIDTH = window.innerWidth;
     const HEIGHT = window.innerHeight;
 
-    scene = new THREE.Scene();
-    camera = new THREE.PerspectiveCamera(60, WIDTH / HEIGHT, 0.1, 10000);
+    scene = new Scene();
+    camera = new PerspectiveCamera(60, WIDTH / HEIGHT, 0.1, 10000);
 
     controls = new OrbitControls(camera, renderer.domElement);
-    controls.target = new THREE.Vector3(0, 0, 0);
-    clock = new THREE.Clock();
+    controls.target = new Vector3(0, 0, 0);
+    clock = new Clock();
     stats = new Stats();
     document.body.appendChild(stats.dom);
 

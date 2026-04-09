@@ -13,7 +13,21 @@ import {
 } from 'three';
 
 import { HALF_PI } from '../tools/Constants.js';
-import { clampMinSize, normalizeSpanDeg } from './Utils.js';
+
+function clampMinSize(value, minValue) {
+    return Number.isFinite(value) ? Math.max(minValue, value) : minValue;
+}
+
+function normalizeSpanDeg(minAngleDeg, maxAngleDeg) {
+    const min = Number.isFinite(minAngleDeg) ? minAngleDeg : 0;
+    const max = Number.isFinite(maxAngleDeg) ? maxAngleDeg : 360;
+    const rawSpan = max - min;
+    if (rawSpan >= 360 || rawSpan <= -360) return 360;
+
+    let span = ((rawSpan % 360) + 360) % 360;
+    if (span === 0 && max !== min) span = 360;
+    return span;
+}
 
 const AXIS_NAMES = {
     X: 'x',

@@ -1,4 +1,4 @@
-export const Hit =  /* glsl */`
+const Hit =  /* glsl */`
     #define STACK_SIZE 128
     #define MAX_BVH_STEPS 512
     #define MAX_TRIANGLES_PER_LEAF 8
@@ -197,3 +197,5 @@ export const Hit =  /* glsl */`
         return bvhHit;
     }
 `
+
+export { Hit };
