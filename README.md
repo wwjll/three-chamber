@@ -62,7 +62,7 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
 -   **Path-Tracing**
 
-    Simple path-tracing demo built on Three.js.
+    A path-tracing demo built on Three.js.
 
     [Preview](https://wwjll.github.io/three-chamber/pathTracing.html)
 

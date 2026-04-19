@@ -219,7 +219,9 @@ const Common =  /* glsl */`
         // Use a compile-time bounded loop for better ANGLE backend compatibility.
         for(int bounce = 0; bounce < MAX_BOUNCE_LOOP; bounce++) {
             if(bounce >= maxBounce) break;
+            setRandomBounce(uint(bounce));
             // Russia Roulette
+            beginRandomDomain(RNG_DOMAIN_RUSSIAN_ROULETTE);
             float survivalProb = min(1.0, max(throughput.r, max(throughput.g, throughput.b)));
             if(rand() > survivalProb) break;
             throughput /= survivalProb;
@@ -327,7 +329,7 @@ const Common =  /* glsl */`
     
     void main(void) {
     
-        seed = updateSeed(resolution.x, resolution.y, samples);
+        seed = updateSeed(samples);
         
         vec3 sampleRadiance = pathTrace();
         vec3 accumulatedRadiance = texelFetch(outTexture, ivec2(gl_FragCoord.xy), 0).rgb;

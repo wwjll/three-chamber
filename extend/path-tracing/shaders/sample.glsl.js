@@ -2,6 +2,7 @@ const Sample =  /* glsl */`
     #define MAX_ENV_CDF_BINARY_SEARCH_STEPS 12
 
     vec3 SampleHemisphere() {
+        beginRandomDomain(RNG_DOMAIN_HEMISPHERE);
         float z = rand();
         float r = max(0.0, sqrt(1.0 - z * z));
         float phi = 2.0 * PI * rand();
@@ -9,6 +10,7 @@ const Sample =  /* glsl */`
     }
 
     vec3 SampleCosineHemisphere() {
+        beginRandomDomain(RNG_DOMAIN_COSINE_HEMISPHERE);
         float u1 = rand();
         float u2 = rand();
         float r = sqrt(u1);
@@ -93,6 +95,7 @@ const Sample =  /* glsl */`
             return vec3(0.0, 1.0, 0.0);
         }
 
+        beginRandomDomain(RNG_DOMAIN_ENVIRONMENT);
         int row = binarySearchMarginalCDF(rand());
         int column = binarySearchConditionalCDF(row, rand());
         vec2 uv = (vec2(float(column), float(row)) + vec2(0.5)) / hdrResolution;
@@ -111,6 +114,7 @@ const Sample =  /* glsl */`
     }
 
     vec3 SampleGGXHalfVector(float alpha, vec3 tangent, vec3 bitangent, vec3 normal) {
+        beginRandomDomain(RNG_DOMAIN_GGX);
         float u1 = rand();
         float u2 = rand();
         float alphaSquared = alpha * alpha;
@@ -133,6 +137,7 @@ const Sample =  /* glsl */`
         Material material,
         out float samplePdf
     ) {
+        beginRandomDomain(RNG_DOMAIN_BRDF);
         float specularWeight = BRDFSpecularSampleWeight(material);
         bool sampleSpecular = rand() < specularWeight;
         vec3 sampledDirection;

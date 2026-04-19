@@ -1,4 +1,4 @@
-import { ClampToEdgeWrapping, Color, DataArrayTexture, DataTexture, FloatType, LinearFilter, Mesh, NearestFilter, NoColorSpace, PlaneGeometry, RGBAFormat, RepeatWrapping, SRGBColorSpace, UnsignedByteType, Vector2, WebGLRenderTarget } from 'three';
+import { ClampToEdgeWrapping, Color, DataArrayTexture, DataTexture, FloatType, LinearFilter, LinearMipmapLinearFilter, Mesh, NearestFilter, NoColorSpace, OrthographicCamera, PlaneGeometry, RGBAFormat, RepeatWrapping, Scene, SRGBColorSpace, UnsignedByteType, Vector2, Vector3, WebGLRenderTarget } from 'three';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { OutputMaterial } from './materials/OutputMaterial'
 import { PathTracingMaterial } from './materials/PathTracingMaterial'
@@ -12,17 +12,19 @@ import {
 
 function* renderTask() {
     while (true) {
-        const { renderer, scene, camera, pathTracingMaterial, outputMaterial } = this;
+        const { renderer, camera, traceScene, traceCamera, pathTracingMaterial, outputMaterial } = this;
 
         camera.updateMatrixWorld();
         camera.updateProjectionMatrix();
         pathTracingMaterial.samples = this.samples;
+        camera.getWorldPosition(this.cameraOrigin);
+        pathTracingMaterial.cameraOrigin = this.cameraOrigin;
         pathTracingMaterial.matrixWorld = camera.matrixWorld;
         pathTracingMaterial.projectionMatrixInverse = camera.projectionMatrixInverse;
         pathTracingMaterial.outTexture = this.outRenderTarget.texture;
 
         renderer.setRenderTarget(this.traceRenderTarget);
-        renderer.render(scene, camera);
+        renderer.render(traceScene, traceCamera);
 
         outputMaterial.renderTexture = this.traceRenderTarget.texture;
 
@@ -210,11 +212,11 @@ function buildTextureArray(textures, colorSpace, fallbackRgba) {
     const texture = new DataArrayTexture(data, width, height, layers);
     texture.format = RGBAFormat;
     texture.type = UnsignedByteType;
-    texture.minFilter = LinearFilter;
+    texture.minFilter = LinearMipmapLinearFilter;
     texture.magFilter = LinearFilter;
     texture.wrapS = RepeatWrapping;
     texture.wrapT = RepeatWrapping;
-    texture.generateMipmaps = false;
+    texture.generateMipmaps = true;
     texture.colorSpace = colorSpace;
     texture.needsUpdate = true;
     return texture;
@@ -229,6 +231,9 @@ class PathTracer {
         this.camera = camera;
         this.task = null;
         this.samples = 0;
+        this.ready = false;
+        this.cameraOrigin = new Vector3();
+        this.rasterFallbackRenderer = null;
         this.init();
     }
 
@@ -253,9 +258,11 @@ class PathTracer {
             new PathTracingMaterial()
         );
         this.pathTracingQuad.frustumCulled = false;
+        this.traceScene = new Scene();
+        this.traceCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
         this.outputQuad = new FullScreenQuad(new OutputMaterial());
 
-        this.scene.add(this.pathTracingQuad);
+        this.traceScene.add(this.pathTracingQuad);
 
         this.pathTracingMaterial = this.pathTracingQuad.material;
         this.outputMaterial = this.outputQuad.material;
@@ -435,9 +442,17 @@ class PathTracer {
         this.pathTracingMaterial.materialPreset = preset;
     }
 
+    setOutputToneMapping(mode) {
+        this.outputMaterial.toneMappingMode = mode;
+    }
+
+    setOutputExposure(exposure) {
+        this.outputMaterial.exposure = exposure;
+    }
+
     // set Data texture
     setDataTexture(triangle, bvh, material) {
-        const pathTracingMaterial = this.pathTracingQuad.material;
+        const pathTracingMaterial = this.pathTracingMaterial;
         pathTracingMaterial.triangleDataTexture = triangle.dataTexture;
         pathTracingMaterial.triangleDataTextureSize = {
             x: triangle.textureWidth,
@@ -459,10 +474,12 @@ class PathTracer {
         if (!this._supportsTextureArrays()) {
             console.warn('[PathTracing] Texture arrays require WebGL2. Scene materials will fall back to factors only.');
             this._disposeSceneTextureArrays();
+            this.ready = true;
             return;
         }
 
         this._setSceneMaterialTextureArrays(material.textures);
+        this.ready = true;
     }
 
     setSize(width, height) {
@@ -490,6 +507,32 @@ class PathTracer {
         }
 
         this.task.next();
+    }
+
+    setRasterFallbackRenderer(callback) {
+        this.rasterFallbackRenderer = typeof callback === 'function' ? callback : null;
+    }
+
+    renderRasterFallback() {
+        if (!this.rasterFallbackRenderer) {
+            return false;
+        }
+
+        this.rasterFallbackRenderer({
+            renderer: this.renderer,
+            scene: this.scene,
+            camera: this.camera,
+            pathTracer: this,
+        });
+        return true;
+    }
+
+    setReady(ready) {
+        this.ready = ready === true;
+    }
+
+    isReady() {
+        return this.ready === true;
     }
 
     reset() {

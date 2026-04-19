@@ -1,5 +1,5 @@
 import { MaterialBase } from '../materials/MaterialBase'
-import { GLSL3, Vector2 } from 'three';
+import { GLSL3, Vector2, Vector3 } from 'three';
 
 import { Struct } from '../shaders/struct.glsl'
 import { Material } from '../shaders/material.glsl'
@@ -32,6 +32,7 @@ class PathTracingMaterial extends MaterialBase {
                 samples: { type: "f", value: null },
                 maxBounce: { type: "i", value: null },
                 resolution: { type: "v2", value: null },
+                cameraOrigin: { type: "v3", value: null },
                 matrixWorld: { type: "m4", value: null },
                 projectionMatrixInverse: { type: "m4", value: null },
                 texelsPerTriangle: { type: "f", value: null },
@@ -59,10 +60,8 @@ class PathTracingMaterial extends MaterialBase {
             },
 
             vertexShader: /* glsl */`
-                out vec3 pos;
                 void main() {
                     gl_Position = vec4(position, 1.0);
-                    pos = position;
                 }
             `,
             fragmentShader: /* glsl */`
@@ -86,11 +85,11 @@ class PathTracingMaterial extends MaterialBase {
                 #define AABB_EPSILON 0.00001
                 #define RAY_OFFSET_EPSILON 0.0002
 
-                in vec3 pos;
                 out highp vec4 pc_fragColor;
                 uniform float samples;
                 uniform int maxBounce;
                 uniform vec2 resolution;
+                uniform vec3 cameraOrigin;
                 uniform mat4 matrixWorld;
                 uniform mat4 projectionMatrixInverse;
                 uniform sampler2D hdrTexture;
@@ -122,6 +121,9 @@ class PathTracingMaterial extends MaterialBase {
                 uniform vec2 materialDataTextureSize;
 
                 uint seed;
+                uint rngDomain;
+                uint rngDimensionCounter;
+                uint rngBounce;
 
                 ${Struct}
                 ${Material}
@@ -157,6 +159,7 @@ class PathTracingMaterial extends MaterialBase {
             `
         })
 
+        this.uniforms.cameraOrigin.value = new Vector3();
         this.uniforms.hdrResolution.value = new Vector2(1, 1);
         this.uniforms.materialDataTextureSize.value = new Vector2(1, 1);
     }

@@ -1,13 +1,15 @@
 const Ray =  /* glsl */`
     Ray createCameraRay() {
+        setRandomBounce(uint(0));
+        beginRandomDomain(RNG_DOMAIN_PIXEL);
         vec2 pixelOffset = vec2((rand() - 0.5), (rand() - 0.5));
         vec2 uv = ((gl_FragCoord.xy + pixelOffset) / resolution) * 2.0 - 1.0;
         vec4 clipPosition = vec4(uv, 1.0, 1.0);
         vec4 viewPosition = projectionMatrixInverse * clipPosition;
         viewPosition /= max(viewPosition.w, EPSILON);
         vec3 worldPosition = (matrixWorld * viewPosition).xyz;
-        vec3 direction = normalize(worldPosition - cameraPosition);
-        return Ray(cameraPosition, direction);
+        vec3 direction = normalize(worldPosition - cameraOrigin);
+        return Ray(cameraOrigin, direction);
     }
     
     RayHit createHit() {
