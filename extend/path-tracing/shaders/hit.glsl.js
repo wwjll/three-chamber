@@ -1,7 +1,9 @@
+import { bvhLeafSize } from '../Constants.js'
+
 const Hit =  /* glsl */`
     #define STACK_SIZE 128
     #define MAX_BVH_STEPS 512
-    #define MAX_TRIANGLES_PER_LEAF 8
+    #define MAX_TRIANGLES_PER_LEAF ${bvhLeafSize}
 
     bool hitTriangle_MT97(Ray ray, vec3 vert0, vec3 vert1, vec3 vert2, inout float t, inout float u, inout float v) {
         vec3 edge1 = vert1 - vert0;

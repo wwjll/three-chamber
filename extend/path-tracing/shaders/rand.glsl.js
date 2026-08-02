@@ -1,8 +1,6 @@
 const Rand =  /* glsl */`
     #define RNG_DOMAIN_PIXEL uint(1)
-    #define RNG_DOMAIN_HEMISPHERE uint(2)
     #define RNG_DOMAIN_COSINE_HEMISPHERE uint(3)
-    #define RNG_DOMAIN_ENVIRONMENT uint(4)
     #define RNG_DOMAIN_GGX uint(5)
     #define RNG_DOMAIN_BRDF uint(6)
     #define RNG_DOMAIN_RUSSIAN_ROULETTE uint(7)

@@ -32,6 +32,23 @@ const Struct =  /* glsl */`
         float alphaMode;
         float doubleSided;
     };
+
+    struct BSDFSample {
+        vec3 direction;
+        vec3 weight;
+        float pdf;
+        uint flags;
+        bool valid;
+    };
+
+    struct LightSample {
+        vec3 direction;
+        vec3 radiance;
+        float distance;
+        float pdf;
+        uint flags;
+        bool valid;
+    };
     
     struct Ray {
         vec3 origin;

@@ -159,10 +159,6 @@ Agent.md
 **/llm_cache/
 **/llm_output/
 
-# AI Agent temporary workspaces and process files
-**/agent_workspace/
-**/agent_temp/
-
 # CRITICAL: Prevent API Keys and secrets from being committed
 .env
 .env.local

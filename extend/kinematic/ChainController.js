@@ -15,6 +15,19 @@ const kukaKr5ChainProfile = {
     ],
 };
 
+// Standard DH parameters published by Universal Robots for the UR3e.
+const ur3eChainProfile = {
+    name: 'universal-robots-ur3e',
+    segments: [
+        { theta: 0, axisSign: 1, thetaOffset: 0, d: 0.15185, a: 0, alpha: 90, minAngle: -360, maxAngle: 360 },
+        { theta: -90, axisSign: 1, thetaOffset: 0, d: 0, a: -0.24355, alpha: 0, minAngle: -360, maxAngle: 360 },
+        { theta: 90, axisSign: 1, thetaOffset: 0, d: 0, a: -0.2132, alpha: 0, minAngle: -160, maxAngle: 160 },
+        { theta: -90, axisSign: 1, thetaOffset: 0, d: 0.13105, a: 0, alpha: 90, minAngle: -360, maxAngle: 360 },
+        { theta: -90, axisSign: 1, thetaOffset: 0, d: 0.08535, a: 0, alpha: -90, minAngle: -360, maxAngle: 360 },
+        { theta: 0, axisSign: 1, thetaOffset: 0, d: 0.0921, a: 0, alpha: 0, minAngle: -360, maxAngle: 360 }
+    ],
+};
+
 function positiveModulo(value, mod) {
     const out = value % mod;
     return out < 0 ? out + mod : out;
@@ -246,6 +259,7 @@ class ChainController {
 
 export {
     kukaKr5ChainProfile,
+    ur3eChainProfile,
     createInitialJointState,
     convertSegmentAxisLimitsToDh,
     createDhParametersFromJointState,

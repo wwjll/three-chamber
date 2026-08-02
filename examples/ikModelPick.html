@@ -1,0 +1,468 @@
+<html>
+
+<head>
+    <title>IK Model Pick</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1" />
+    <style>
+        html,
+        body {
+            padding: 0;
+            margin: 0;
+            overflow: hidden;
+            font-family: monospace;
+            background: #242a2e;
+        }
+
+        #label {
+            position: absolute;
+            left: 82px;
+            bottom: calc(12px + var(--sequence-editor-height, 0px));
+            color: #e4eff1;
+            opacity: 0.86;
+            line-height: 1.45;
+            pointer-events: none;
+            text-shadow: 0 1px 8px #11181b;
+        }
+
+        #label strong {
+            color: #ffffff;
+        }
+
+        #status {
+            color: #aee8d0;
+        }
+
+        .tool-dock {
+            position: fixed;
+            z-index: 40;
+            left: 12px;
+            top: calc((100vh - var(--sequence-editor-height, 0px)) / 2);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 7px;
+            transform: translateY(-50%);
+            background: rgba(22, 27, 31, 0.92);
+            border: 1px solid rgba(181, 201, 214, 0.22);
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+        }
+
+        .tool-dock__button {
+            position: relative;
+            width: 44px;
+            height: 44px;
+            padding: 0;
+            color: #c6d0d8;
+            background: #30373d;
+            border: 1px solid #4b555d;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .tool-dock__button:hover,
+        .tool-dock__button.is-active {
+            color: #ffffff;
+            background: #476174;
+            border-color: #7c9aaf;
+        }
+
+        .tool-dock__button.is-active::after {
+            position: absolute;
+            top: 12px;
+            left: -11px;
+            width: 3px;
+            height: 18px;
+            content: '';
+            background: #8ed6ff;
+            border-radius: 2px;
+        }
+
+        .tool-dock__icon,
+        .tool-dock__icon::before,
+        .tool-dock__icon::after {
+            position: absolute;
+            display: block;
+            content: '';
+        }
+
+        .tool-dock__icon {
+            inset: 0;
+        }
+
+        .tool-dock__icon--scene::before {
+            top: 12px;
+            left: 12px;
+            width: 16px;
+            height: 16px;
+            border: 2px solid currentColor;
+            transform: rotate(30deg) skew(-4deg, -4deg);
+        }
+
+        .tool-dock__icon--scene::after {
+            top: 21px;
+            left: 14px;
+            width: 16px;
+            height: 2px;
+            background: currentColor;
+            transform: rotate(-30deg);
+        }
+
+        .tool-dock__icon--viz::before {
+            top: 14px;
+            left: 10px;
+            width: 20px;
+            height: 12px;
+            border: 2px solid currentColor;
+            border-radius: 50%;
+        }
+
+        .tool-dock__icon--viz::after {
+            top: 18px;
+            left: 18px;
+            width: 6px;
+            height: 6px;
+            background: currentColor;
+            border-radius: 50%;
+        }
+
+        .tool-dock__icon--sequence::before {
+            top: 13px;
+            left: 12px;
+            width: 20px;
+            height: 2px;
+            background: currentColor;
+            box-shadow: 0 7px 0 currentColor, 0 14px 0 currentColor;
+        }
+
+        .tool-dock__icon--sequence::after {
+            top: 10px;
+            left: 16px;
+            width: 6px;
+            height: 6px;
+            background: currentColor;
+            border-radius: 50%;
+            box-shadow: 8px 7px 0 currentColor, -2px 14px 0 currentColor;
+        }
+
+        .tool-dock__icon--solver::before {
+            top: 11px;
+            left: 11px;
+            width: 18px;
+            height: 18px;
+            border: 2px solid currentColor;
+            border-radius: 50%;
+        }
+
+        .tool-dock__icon--solver::after {
+            top: 20px;
+            left: 20px;
+            width: 10px;
+            height: 2px;
+            background: currentColor;
+            transform: rotate(-42deg);
+            transform-origin: left center;
+        }
+
+        .tool-panel {
+            position: fixed;
+            z-index: 39;
+            left: 76px;
+            top: 12px;
+            width: 220px;
+            padding: 12px;
+            color: #dce5eb;
+            background: rgba(24, 29, 33, 0.96);
+            border: 1px solid rgba(181, 201, 214, 0.24);
+            border-radius: 6px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
+        }
+
+        .tool-panel[hidden] {
+            display: none;
+        }
+
+        .tool-panel [hidden] {
+            display: none;
+        }
+
+        .tool-panel h2 {
+            margin: 0 0 10px;
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .tool-panel__command {
+            display: block;
+            width: 100%;
+            height: 32px;
+            margin-top: 7px;
+            color: #e5ebef;
+            background: #343c42;
+            border: 1px solid #4c5861;
+            border-radius: 4px;
+            font: inherit;
+            cursor: pointer;
+        }
+
+        .tool-panel__command:hover {
+            background: #465865;
+            border-color: #718a9b;
+        }
+
+        .tool-panel__toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 34px;
+            color: #cbd5dc;
+            cursor: pointer;
+        }
+
+        .tool-panel__toggle input {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+        }
+
+        .tool-panel__switch {
+            position: relative;
+            width: 34px;
+            height: 18px;
+            background: #30383e;
+            border: 1px solid #505b63;
+            border-radius: 9px;
+        }
+
+        .tool-panel__switch::after {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 12px;
+            height: 12px;
+            content: '';
+            background: #9da9b1;
+            border-radius: 50%;
+            transition: transform 120ms ease, background 120ms ease;
+        }
+
+        .tool-panel__toggle input:checked + .tool-panel__switch {
+            background: #41677e;
+            border-color: #73a8c5;
+        }
+
+        .tool-panel__toggle input:checked + .tool-panel__switch::after {
+            background: #ffffff;
+            transform: translateX(16px);
+        }
+
+        .tool-panel__segment {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 3px;
+            margin-bottom: 10px;
+        }
+
+        .tool-panel__segment button {
+            height: 29px;
+            color: #bdc9d1;
+            background: #30373d;
+            border: 1px solid #4b555d;
+            border-radius: 3px;
+            font: inherit;
+            cursor: pointer;
+        }
+
+        .tool-panel__segment button:hover,
+        .tool-panel__segment button.is-active {
+            color: #ffffff;
+            background: #476174;
+            border-color: #7c9aaf;
+        }
+
+        .tool-panel__metrics {
+            padding: 7px 0;
+            margin-bottom: 7px;
+            border-top: 1px solid #3b444b;
+            border-bottom: 1px solid #3b444b;
+        }
+
+        .tool-panel__metric,
+        .tool-panel__field {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 29px;
+            gap: 10px;
+            color: #cbd5dc;
+        }
+
+        .tool-panel__metric output {
+            color: #9fd4f1;
+            white-space: nowrap;
+        }
+
+        .tool-panel__field[hidden] {
+            display: none;
+        }
+
+        .tool-panel__field input {
+            box-sizing: border-box;
+            width: 88px;
+            height: 25px;
+            padding: 2px 5px;
+            color: #f0f4f6;
+            background: #14191d;
+            border: 1px solid #465159;
+            border-radius: 2px;
+            font: inherit;
+        }
+
+        #loading {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            padding: 8px 12px;
+            color: #e7f2f4;
+            background: rgba(18, 22, 24, 0.82);
+            border: 1px solid rgba(190, 225, 232, 0.24);
+            pointer-events: none;
+        }
+    </style>
+    <link rel="shortcut icon" href="#">
+</head>
+
+<body>
+    <nav class="tool-dock" aria-label="IK tools">
+        <button
+            class="tool-dock__button"
+            type="button"
+            data-tool="scene"
+            aria-label="Scene"
+            aria-pressed="false"
+            title="Scene"
+        >
+            <span class="tool-dock__icon tool-dock__icon--scene" aria-hidden="true"></span>
+        </button>
+        <button
+            class="tool-dock__button"
+            type="button"
+            data-tool="viz"
+            aria-label="Visualization"
+            aria-pressed="false"
+            title="Visualization"
+        >
+            <span class="tool-dock__icon tool-dock__icon--viz" aria-hidden="true"></span>
+        </button>
+        <button
+            class="tool-dock__button"
+            type="button"
+            data-tool="solver"
+            aria-label="Solver"
+            aria-pressed="false"
+            title="Solver"
+        >
+            <span class="tool-dock__icon tool-dock__icon--solver" aria-hidden="true"></span>
+        </button>
+        <button
+            class="tool-dock__button"
+            type="button"
+            data-tool="sequence"
+            aria-label="Sequence"
+            aria-pressed="false"
+            title="Sequence"
+        >
+            <span class="tool-dock__icon tool-dock__icon--sequence" aria-hidden="true"></span>
+        </button>
+    </nav>
+    <aside class="tool-panel" data-tool-panel="scene" aria-label="Scene controls" hidden>
+        <h2>Scene</h2>
+        <button id="reset-cubes" class="tool-panel__command" type="button">Reset Cubes</button>
+        <button id="reset-robot" class="tool-panel__command" type="button">Reset Robot</button>
+    </aside>
+    <aside class="tool-panel" data-tool-panel="viz" aria-label="Visualization controls" hidden>
+        <h2>Visualization</h2>
+        <label class="tool-panel__toggle">
+            <span>Actuator Colliders</span>
+            <input id="show-actuator-colliders" type="checkbox" />
+            <span class="tool-panel__switch" aria-hidden="true"></span>
+        </label>
+        <label class="tool-panel__toggle">
+            <span>End Control</span>
+            <input id="show-end-control" type="checkbox" />
+            <span class="tool-panel__switch" aria-hidden="true"></span>
+        </label>
+        <label class="tool-panel__toggle">
+            <span>Trajectory</span>
+            <input id="show-trajectory" type="checkbox" />
+            <span class="tool-panel__switch" aria-hidden="true"></span>
+        </label>
+    </aside>
+    <aside class="tool-panel" data-tool-panel="solver" aria-label="Solver controls" hidden>
+        <h2>Solver</h2>
+        <div class="tool-panel__segment" aria-label="IK algorithm">
+            <button type="button" data-solver-method="Jacobian">Basic IK</button>
+            <button type="button" data-solver-method="DLS">DLS</button>
+        </div>
+        <label class="tool-panel__toggle">
+            <span>Constrain Orientation</span>
+            <input id="solver-constrain-orientation" type="checkbox" />
+            <span class="tool-panel__switch" aria-hidden="true"></span>
+        </label>
+        <div class="tool-panel__metrics">
+            <div class="tool-panel__metric">
+                <span>Position Error</span>
+                <output id="solver-position-error">--</output>
+            </div>
+            <div class="tool-panel__metric" data-orientation-only>
+                <span>Rotation Error</span>
+                <output id="solver-rotation-error">--</output>
+            </div>
+            <div class="tool-panel__metric">
+                <span>Iterations</span>
+                <output id="solver-iterations">--</output>
+            </div>
+        </div>
+        <label class="tool-panel__field">
+            <span>Max Iter</span>
+            <input id="solver-max-iter" type="number" min="1" max="200" step="1" />
+        </label>
+        <label class="tool-panel__field">
+            <span>Tolerance</span>
+            <input id="solver-tolerance" type="number" min="0.00001" max="0.1" step="0.0001" />
+        </label>
+        <label class="tool-panel__field" data-solver-field="Jacobian">
+            <span>Alpha</span>
+            <input id="solver-alpha" type="number" min="0.001" max="0.5" step="0.001" />
+        </label>
+        <label class="tool-panel__field" data-solver-field="DLS">
+            <span>Damping</span>
+            <input id="solver-damping" type="number" min="0.00001" max="1" step="0.001" />
+        </label>
+        <label class="tool-panel__field" data-solver-field="DLS">
+            <span>Max Delta</span>
+            <input id="solver-max-delta" type="number" min="0.0001" max="0.5" step="0.001" />
+        </label>
+        <label class="tool-panel__field" data-solver-field="DLS" data-orientation-only>
+            <span>Rotation Weight</span>
+            <input id="solver-rotation-weight" type="number" min="0" max="2" step="0.01" />
+        </label>
+        <label class="tool-panel__field" data-solver-field="DLS" data-orientation-only>
+            <span>Rotation Tol</span>
+            <input id="solver-rotation-tolerance" type="number" min="0.0001" max="0.5" step="0.001" />
+        </label>
+    </aside>
+    <div id="label">
+        <strong>IK Model Pick</strong><br />
+        UR3e + Robotiq 2F-85<br />
+        <span id="status">Loading model...</span>
+    </div>
+    <div id="loading">Loading UR3e and Robotiq geometry...</div>
+    <script type="module" src="./ikModelPick.js"></script>
+</body>
+
+</html>

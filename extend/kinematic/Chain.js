@@ -70,6 +70,8 @@ class Actuator {
         this._boxGeometry = new BoxGeometry(1, 1, 1);
         this._cylinderGeometry = new CylinderGeometry(1, 1, 1, 20);
         this._physicsColliders = [];
+        this._physicsColliderBoxes = [];
+        this._customPhysicsColliderBoxes = null;
         this._railCollider = null;
         this._leftJawCollider = null;
         this._rightJawCollider = null;
@@ -147,13 +149,31 @@ class Actuator {
         this._rightJawCollider = null;
     }
 
-    _rebuildPhysicsColliders(dims) {
+    _applyPhysicsColliderBoxes(boxes) {
         if (!this.physicsWorld || !this._physicsBody) return;
         this._clearPhysicsColliders();
-        const build = (hx, hy, hz, tx, ty, tz) => {
+        this._physicsColliderBoxes = boxes.map((box) => ({
+            name: box.name ?? 'collider',
+            role: box.role ?? 'body',
+            halfExtents: { ...box.halfExtents },
+            position: { ...box.position },
+            quaternion: {
+                x: box.quaternion?.x ?? 0,
+                y: box.quaternion?.y ?? 0,
+                z: box.quaternion?.z ?? 0,
+                w: box.quaternion?.w ?? 1,
+            },
+        }));
+        const build = (box) => {
+            const { halfExtents, position, quaternion } = box;
             const collider = this.physicsWorld.createCollider(
-                ColliderDesc.cuboid(hx, hy, hz)
-                    .setTranslation(tx, ty, tz)
+                ColliderDesc.cuboid(
+                    halfExtents.x,
+                    halfExtents.y,
+                    halfExtents.z,
+                )
+                    .setTranslation(position.x, position.y, position.z)
+                    .setRotation(quaternion)
                     .setFriction(1.0),
                 this._physicsBody,
             );
@@ -161,10 +181,66 @@ class Actuator {
             collider.setSolverGroups(_GRIPPER_INTERACTION_GROUPS);
             return collider;
         };
-        this._railCollider = build(dims.railXSize * 0.5, dims.railYSize * 0.5, dims.railZSize * 0.5, dims.railCenterX, 0, 0);
-        this._leftJawCollider = build(dims.jawXSize * 0.5, dims.jawYSize * 0.5, dims.jawZSize * 0.5, dims.jawCenterX, dims.jawOffset, 0);
-        this._rightJawCollider = build(dims.jawXSize * 0.5, dims.jawYSize * 0.5, dims.jawZSize * 0.5, dims.jawCenterX, -dims.jawOffset, 0);
-        this._physicsColliders.push(this._railCollider, this._leftJawCollider, this._rightJawCollider);
+        for (const box of this._physicsColliderBoxes) {
+            const collider = build(box);
+            this._physicsColliders.push(collider);
+            if (box.role === 'rail') {
+                this._railCollider = collider;
+            } else if (box.role === 'leftJaw') {
+                this._leftJawCollider = collider;
+            } else if (box.role === 'rightJaw') {
+                this._rightJawCollider = collider;
+            }
+        }
+    }
+
+    _rebuildPhysicsColliders(dims) {
+        const defaultBoxes = [
+            {
+                name: 'rail',
+                role: 'rail',
+                halfExtents: {
+                    x: dims.railXSize * 0.5,
+                    y: dims.railYSize * 0.5,
+                    z: dims.railZSize * 0.5,
+                },
+                position: { x: dims.railCenterX, y: 0, z: 0 },
+                quaternion: { x: 0, y: 0, z: 0, w: 1 },
+            },
+            {
+                name: 'leftJaw',
+                role: 'leftJaw',
+                halfExtents: {
+                    x: dims.jawXSize * 0.5,
+                    y: dims.jawYSize * 0.5,
+                    z: dims.jawZSize * 0.5,
+                },
+                position: {
+                    x: dims.jawCenterX,
+                    y: dims.jawOffset,
+                    z: 0,
+                },
+                quaternion: { x: 0, y: 0, z: 0, w: 1 },
+            },
+            {
+                name: 'rightJaw',
+                role: 'rightJaw',
+                halfExtents: {
+                    x: dims.jawXSize * 0.5,
+                    y: dims.jawYSize * 0.5,
+                    z: dims.jawZSize * 0.5,
+                },
+                position: {
+                    x: dims.jawCenterX,
+                    y: -dims.jawOffset,
+                    z: 0,
+                },
+                quaternion: { x: 0, y: 0, z: 0, w: 1 },
+            },
+        ];
+        this._applyPhysicsColliderBoxes(
+            this._customPhysicsColliderBoxes ?? defaultBoxes,
+        );
     }
 
     _updateShape() {
@@ -254,6 +330,32 @@ class Actuator {
             left: this._leftJawCollider ?? null,
             right: this._rightJawCollider ?? null,
         };
+    }
+
+    setPhysicsColliderBoxes(boxes = null) {
+        this._customPhysicsColliderBoxes = Array.isArray(boxes)
+            ? boxes.map((box) => ({
+                name: box.name,
+                role: box.role,
+                halfExtents: { ...box.halfExtents },
+                position: { ...box.position },
+                quaternion: {
+                    x: box.quaternion?.x ?? 0,
+                    y: box.quaternion?.y ?? 0,
+                    z: box.quaternion?.z ?? 0,
+                    w: box.quaternion?.w ?? 1,
+                },
+            }))
+            : null;
+        if (this._customPhysicsColliderBoxes) {
+            this._applyPhysicsColliderBoxes(this._customPhysicsColliderBoxes);
+        } else {
+            this._updateShape();
+        }
+    }
+
+    getPhysicsColliderBoxes() {
+        return this._physicsColliderBoxes;
     }
 
     syncPhysics() {

@@ -1,26 +1,23 @@
-import { MaterialBase } from '../materials/MaterialBase'
+import { MaterialBase } from '../materials/MaterialBase.js'
 import { GLSL3, Vector2, Vector3 } from 'three';
 
-import { Struct } from '../shaders/struct.glsl'
-import { Material } from '../shaders/material.glsl'
-import { Math } from '../shaders/math.glsl'
-import { Utils } from '../shaders/utils.glsl'
-import { Rand } from '../shaders/rand.glsl'
-import { Ray } from '../shaders/ray.glsl'
-import { Hit } from '../shaders/hit.glsl'
-import { Brdf } from '../shaders/brdf.glsl'
-import { Sample } from '../shaders/sample.glsl'
-import { Common } from '../shaders/common.glsl'
+import { Struct } from '../shaders/struct.glsl.js'
+import { Material } from '../shaders/material.glsl.js'
+import { Math } from '../shaders/math.glsl.js'
+import { Utils } from '../shaders/utils.glsl.js'
+import { Rand } from '../shaders/rand.glsl.js'
+import { Ray } from '../shaders/ray.glsl.js'
+import { Hit } from '../shaders/hit.glsl.js'
+import { Brdf } from '../shaders/brdf.glsl.js'
+import { Sample } from '../shaders/sample.glsl.js'
+import { Light } from '../shaders/light.glsl.js'
+import { Common } from '../shaders/common.glsl.js'
 
 class PathTracingMaterial extends MaterialBase {
     constructor() {
         super({
 
             glslVersion: GLSL3,
-
-            defines: {
-                ENABLE_ENV_MISS_MIS: 1,
-            },
 
             transparent: false,
 
@@ -52,10 +49,6 @@ class PathTracingMaterial extends MaterialBase {
                 materialPreset: { type: "i", value: 0 },
                 debugMode: { type: "i", value: 0 },
                 hdrTexture: { type: "t", value: null },
-                hdrConditionalDistributionTexture: { type: "t", value: null },
-                hdrMarginalDistributionTexture: { type: "t", value: null },
-                hdrResolution: { type: "v2", value: null },
-                hdrTotalWeight: { type: "f", value: 0.0 },
                 maxTransparentSteps: { type: "i", value: 2 },
             },
 
@@ -103,15 +96,7 @@ class PathTracingMaterial extends MaterialBase {
                 uniform highp sampler2DArray sceneEmissiveTextureArray;
                 uniform int materialPreset;
                 uniform int debugMode;
-                uniform sampler2D hdrConditionalDistributionTexture;
-                uniform sampler2D hdrMarginalDistributionTexture;
-                uniform vec2 hdrResolution;
-                uniform float hdrTotalWeight;
                 uniform int maxTransparentSteps;
-                // Compatibility shim for stale bundles that still reference the old
-                // runtime MIS uniform name. The actual feature toggle now uses
-                // ENABLE_DIRECT_ENV_MIS as a compile-time define.
-                #define enableDirectEnvironmentMIS 0
 
                 uniform float texelsPerTriangle;
                 uniform float texelsPerBVHNode;
@@ -155,12 +140,12 @@ class PathTracingMaterial extends MaterialBase {
                     return texture(sceneEmissiveTextureArray, vec3(uv, textureIndex));
                 }
 
+                ${Light}
                 ${Common}
             `
         })
 
         this.uniforms.cameraOrigin.value = new Vector3();
-        this.uniforms.hdrResolution.value = new Vector2(1, 1);
         this.uniforms.materialDataTextureSize.value = new Vector2(1, 1);
     }
 }
