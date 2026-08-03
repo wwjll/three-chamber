@@ -26,5 +26,10 @@
     "eslint": "^9.21.0",
     "globals": "^15.15.0",
     "http-server": "^14.1.1"
+  },
+  "pnpm": {
+    "overrides": {
+      "picomatch": "2.3.2"
+    }
   }
 }
