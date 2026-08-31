@@ -1,4 +1,20 @@
-import { GridHelper, MathUtils, PerspectiveCamera, Scene, WebGLRenderer } from 'three';
+import {
+    ACESFilmicToneMapping,
+    AmbientLight,
+    Color,
+    DirectionalLight,
+    GridHelper,
+    HemisphereLight,
+    MathUtils,
+    Mesh,
+    MeshStandardMaterial,
+    PCFSoftShadowMap,
+    PerspectiveCamera,
+    PlaneGeometry,
+    Scene,
+    SRGBColorSpace,
+    WebGLRenderer,
+} from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Pane } from 'tweakpane';
 import { getRenderLoopController } from '../extend/tools/Tool.js';
@@ -11,8 +27,9 @@ let chain;
 let suppressUpdate = false;
 let armFolderApis = [];
 let styleBindings = [];
-const BG_COLOR = 0x2b2b2b;
+const BG_COLOR = 0x242a2e;
 const FRAME_RATE = 30;
+const DEFAULT_EXPOSURE = 1.2;
 const renderLoop = getRenderLoopController();
 
 const styleParams = {
@@ -35,7 +52,12 @@ const styleParams = {
     dofSegments: 64,
     dofOffsetZ: 1e-4,
     axisHelperSize: 0.1,
-    syncUp: true
+    syncUp: true,
+    litMaterials: true,
+    roughness: 0.42,
+    metalness: 0.24,
+    castShadow: true,
+    receiveShadow: true,
 };
 
 const defaultStyleParams = JSON.parse(JSON.stringify(styleParams));
@@ -51,9 +73,7 @@ function resetStyles() {
     saveStyles();
     updateArm();
     for (const binding of styleBindings) {
-        if (typeof binding.refresh === 'function') {
-            binding.refresh();
-        }
+        binding.refresh();
     }
 }
 
@@ -115,14 +135,14 @@ const createParams = {
         };
 
         armFolder.addBinding(armParams, 'theta', { min: -180, max: 180, label: 'Theta' }).on('change', (ev) => {
-            if (ev.last === false) return;
+            if (ev.last === false) {return;}
             updateArm();
         });
         armFolder.addBinding(armParams, 'axisSign', {
             label: 'Axis Sign',
             options: { '+1': 1, '-1': -1 }
         }).on('change', (ev) => {
-            if (ev.last === false) return;
+            if (ev.last === false) {return;}
             updateArm();
         });
         armFolder.addBinding(armParams, 'thetaOffset', {
@@ -130,19 +150,19 @@ const createParams = {
             max: armParams.maxAngle,
             label: 'Theta Offset'
         }).on('change', (ev) => {
-            if (ev.last === false) return;
+            if (ev.last === false) {return;}
             updateArm();
         });
         armFolder.addBinding(armParams, 'd', { min: -10, max: 10, label: 'd' }).on('change', (ev) => {
-            if (ev.last === false) return;
+            if (ev.last === false) {return;}
             updateArm();
         });
         armFolder.addBinding(armParams, 'a', { min: -10, max: 10, label: 'a' }).on('change', (ev) => {
-            if (ev.last === false) return;
+            if (ev.last === false) {return;}
             updateArm();
         });
         armFolder.addBinding(armParams, 'alpha', { min: -180, max: 180, label: 'Alpha' }).on('change', (ev) => {
-            if (ev.last === false) return;
+            if (ev.last === false) {return;}
             updateArm();
         });
         armFolder.addButton({ title: 'Remove Arm Segment' }).on('click', () => {
@@ -195,9 +215,9 @@ function convertAxisLimitsToDh(segment) {
     // Convert axis-space limits to DH-space limits.
     // Wrap intervals (min > max) are preserved so DOF helper and solver share semantics.
     const axisSign = segment.axisSign === -1 ? -1 : 1;
-    const thetaOffsetDeg = Number.isFinite(segment.thetaOffset) ? segment.thetaOffset : 0;
-    const minAxisDeg = Number.isFinite(segment.minAngle) ? segment.minAngle : -185;
-    const maxAxisDeg = Number.isFinite(segment.maxAngle) ? segment.maxAngle : 185;
+    const thetaOffsetDeg = segment.thetaOffset ?? 0;
+    const minAxisDeg = segment.minAngle ?? -185;
+    const maxAxisDeg = segment.maxAngle ?? 185;
     const isWrap = minAxisDeg > maxAxisDeg;
 
     const mappedMin = axisSign * minAxisDeg + thetaOffsetDeg;
@@ -268,7 +288,7 @@ const presets = {
 
 function loadPreset(name) {
     const preset = presets[name];
-    if (!preset) return;
+    if (!preset) {return;}
 
     const paramsArray = preset.segments.map(params => [
         params.theta ?? 0,
@@ -300,45 +320,48 @@ init();
 
 function init() {
     scene = new Scene();
+    scene.background = new Color(BG_COLOR);
 
     camera = new PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(2, 2, 2);
+    camera.position.set(1.5, 1.3, 1.5);
 
     renderer = new WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setClearColor(BG_COLOR, 1);
+    renderer.outputColorSpace = SRGBColorSpace;
+    renderer.toneMapping = ACESFilmicToneMapping;
+    renderer.toneMappingExposure = DEFAULT_EXPOSURE;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
 
     controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 0, 0.5);
+    controls.target.set(0.25, 0.5, -0.25);
     controls.update();
     controls.addEventListener('change', () => {
         renderLoop.requestRender();
     });
 
-    const gridHelper = new GridHelper(20, 20);
-    scene.add(gridHelper);
+    addEnvironment();
 
     chain = new Chain(scene);
     renderLoop.configure({
         fps: FRAME_RATE,
         render: renderFrame
     });
+    renderLoop.setContinuous(false);
     renderLoop.setRenderOnIdle(false);
 
-    pane = new Pane({ title: 'DH Links' });
-    pane.element.style.right = 'auto';
-    pane.element.style.left = '0px';
-    pane.element.style.top = '0px';
-    pane.element.style.margin = '0px';
-    pane.element.style.maxHeight = '100vh';
-    pane.element.style.overflow = 'auto';
+    pane = new Pane({
+        title: 'DH Links',
+        container: document.getElementById('control-panel')
+    });
 
     const bindStyle = (folder, key, options = {}) => {
         const binding = folder.addBinding(styleParams, key, options);
         binding.on('change', (ev) => {
-            if (ev.last === false) return;
+            if (ev.last === false) {return;}
             updateArm();
             saveStyles();
         });
@@ -360,7 +383,7 @@ function init() {
 
     const baseFolder = pane.addFolder({ title: 'Base' });
     baseFolder.addBinding(baseParams, 'mdhMode', { label: 'MDH Mode' }).on('change', (ev) => {
-        if (ev.last === false) return;
+        if (ev.last === false) {return;}
         const value = ev.value;
         const params = segmentsToParamArray(createParams.armSegments);
         const converted = value ? convertMDH(params) : convertDH(params);
@@ -369,20 +392,20 @@ function init() {
     });
     const baseOffsetFolder = baseFolder.addFolder({ title: 'Offset' });
     baseOffsetFolder.addBinding(baseParams.baseOffset, 'x', { min: -10, max: 10, label: 'Offset X' }).on('change', (ev) => {
-        if (ev.last === false) return;
+        if (ev.last === false) {return;}
         updateArm();
     });
     baseOffsetFolder.addBinding(baseParams.baseOffset, 'y', { min: -10, max: 10, label: 'Offset Y' }).on('change', (ev) => {
-        if (ev.last === false) return;
+        if (ev.last === false) {return;}
         updateArm();
     });
     baseOffsetFolder.addBinding(baseParams.baseOffset, 'z', { min: -10, max: 10, label: 'Offset Z' }).on('change', (ev) => {
-        if (ev.last === false) return;
+        if (ev.last === false) {return;}
         updateArm();
     });
     baseFolder.expanded = true;
 
-    styleFolder = pane.addFolder({ title: 'Viz' });
+    styleFolder = pane.addFolder({ title: 'Visualization' });
     const jointsLinksFolder = styleFolder.addFolder({ title: 'Joints && Links' });
     bindStyle(jointsLinksFolder, 'jointColor', { label: 'Joint Color', view: 'color' });
     bindStyle(jointsLinksFolder, 'linkColor', { label: 'Link Color', view: 'color' });
@@ -438,8 +461,55 @@ function init() {
     renderLoop.requestRender();
 }
 
+function addEnvironment() {
+    const floor = new Mesh(
+        new PlaneGeometry(20, 20),
+        new MeshStandardMaterial({
+            color: 0x596064,
+            roughness: 0.82,
+            metalness: 0.05,
+        }),
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.012;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    const grid = new GridHelper(20, 20, 0x7b8589, 0x687175);
+    grid.position.y = -0.005;
+    grid.material.transparent = true;
+    grid.material.opacity = 0.24;
+    scene.add(grid);
+
+    scene.add(new AmbientLight(0xffffff, 0.58));
+
+    const hemisphere = new HemisphereLight(0xf5fbff, 0x32383b, 1.45);
+    hemisphere.position.set(0, 8, 0);
+    scene.add(hemisphere);
+
+    const key = new DirectionalLight(0xffffff, 4.2);
+    key.position.set(5, 8, 6);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.left = -3;
+    key.shadow.camera.right = 3;
+    key.shadow.camera.top = 4;
+    key.shadow.camera.bottom = -2;
+    key.shadow.camera.near = 0.5;
+    key.shadow.camera.far = 24;
+    scene.add(key);
+
+    const fill = new DirectionalLight(0xb9dcff, 1.3);
+    fill.position.set(-5, 4, 4);
+    scene.add(fill);
+
+    const rim = new DirectionalLight(0xc0ecff, 1.45);
+    rim.position.set(-3, 5, -6);
+    scene.add(rim);
+}
+
 function updateArm() {
-    if (suppressUpdate) return;
+    if (suppressUpdate) {return;}
     const dhParameters = createDhParametersFromSegments(createParams.armSegments);
     chain.update(dhParameters, styleParams, baseParams);
     renderLoop.requestRender();

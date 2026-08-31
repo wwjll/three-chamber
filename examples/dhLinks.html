@@ -13,6 +13,21 @@
             font-family: monospace;
         }
 
+        #control-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 10;
+            width: min(256px, 100vw);
+            max-height: 100vh;
+            overflow: auto;
+        }
+
+        #control-panel>.tp-dfwv {
+            position: static;
+            width: 100%;
+        }
+
         #info {
             color: white;
             position: absolute;
@@ -30,6 +45,7 @@
 </head>
 
 <body>
+    <div id="control-panel"></div>
     <div id="info">
         <div id="output"></div>
     </div>

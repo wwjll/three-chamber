@@ -1,13 +1,15 @@
-import { ClampToEdgeWrapping, Color, DataArrayTexture, DataTexture, FloatType, LinearFilter, LinearMipmapLinearFilter, Mesh, NearestFilter, NoColorSpace, OrthographicCamera, PlaneGeometry, RGBAFormat, RepeatWrapping, Scene, SRGBColorSpace, UnsignedByteType, Vector2, Vector3, WebGLRenderTarget } from 'three';
+import { ClampToEdgeWrapping, Color, DataArrayTexture, FloatType, LinearFilter, LinearMipmapLinearFilter, Mesh, NearestFilter, NoColorSpace, OrthographicCamera, PlaneGeometry, RGBAFormat, RepeatWrapping, Scene, SRGBColorSpace, UnsignedByteType, Vector3, WebGLRenderTarget } from 'three';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
-import { OutputMaterial } from './materials/OutputMaterial'
-import { PathTracingMaterial } from './materials/PathTracingMaterial'
+import { OutputMaterial } from './materials/OutputMaterial.js'
+import { PathTracingMaterial } from './materials/PathTracingMaterial.js'
 
 import {
     texelsPerTriangle,
     texelsPerBVHNode,
     texelsPerMaterial,
-} from './Constants'
+    maxPathBounces,
+    maxTransparentSteps,
+} from './Constants.js'
 
 
 function* renderTask() {
@@ -37,95 +39,6 @@ function* renderTask() {
         yield;
     }
 
-}
-
-function buildHdrImportanceDistribution(texture) {
-    const image = texture.image;
-    const width = image?.width || 0;
-    const height = image?.height || 0;
-    const data = image?.data;
-
-    if (!width || !height || !data) {
-        return null;
-    }
-
-    const conditionalData = new Float32Array(width * height * 4);
-    const marginalData = new Float32Array(height * 4);
-    const rowWeights = new Float32Array(height);
-    let totalWeight = 0;
-
-    for (let y = 0; y < height; y++) {
-        const theta = ((y + 0.5) / height) * Math.PI;
-        const sinTheta = Math.max(Math.sin(theta), 1e-6);
-        let rowSum = 0;
-
-        for (let x = 0; x < width; x++) {
-            const texelIndex = (y * width + x) * 4;
-            const r = Math.min(data[texelIndex], 10);
-            const g = Math.min(data[texelIndex + 1], 10);
-            const b = Math.min(data[texelIndex + 2], 10);
-            const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            rowSum += luminance * sinTheta;
-            conditionalData[(y * width + x) * 4] = rowSum;
-        }
-
-        rowWeights[y] = rowSum;
-        totalWeight += rowSum;
-
-        if (rowSum > 0) {
-            for (let x = 0; x < width; x++) {
-                conditionalData[(y * width + x) * 4] /= rowSum;
-            }
-        } else {
-            for (let x = 0; x < width; x++) {
-                conditionalData[(y * width + x) * 4] = (x + 1) / width;
-            }
-        }
-    }
-
-    let marginalCdf = 0;
-    for (let y = 0; y < height; y++) {
-        marginalCdf += rowWeights[y];
-        marginalData[y * 4] = totalWeight > 0 ? marginalCdf / totalWeight : (y + 1) / height;
-    }
-
-    const conditionalTexture = new DataTexture(
-        conditionalData,
-        width,
-        height,
-        RGBAFormat,
-        FloatType
-    );
-    conditionalTexture.colorSpace = NoColorSpace;
-    conditionalTexture.minFilter = NearestFilter;
-    conditionalTexture.magFilter = NearestFilter;
-    conditionalTexture.wrapS = ClampToEdgeWrapping;
-    conditionalTexture.wrapT = ClampToEdgeWrapping;
-    conditionalTexture.generateMipmaps = false;
-    conditionalTexture.needsUpdate = true;
-
-    const marginalTexture = new DataTexture(
-        marginalData,
-        height,
-        1,
-        RGBAFormat,
-        FloatType
-    );
-    marginalTexture.colorSpace = NoColorSpace;
-    marginalTexture.minFilter = NearestFilter;
-    marginalTexture.magFilter = NearestFilter;
-    marginalTexture.wrapS = ClampToEdgeWrapping;
-    marginalTexture.wrapT = ClampToEdgeWrapping;
-    marginalTexture.generateMipmaps = false;
-    marginalTexture.needsUpdate = true;
-
-    return {
-        conditionalTexture,
-        marginalTexture,
-        width,
-        height,
-        totalWeight,
-    };
 }
 
 function createFallbackLayer(rgba) {
@@ -232,6 +145,7 @@ class PathTracer {
         this.task = null;
         this.samples = 0;
         this.ready = false;
+        this.disposed = false;
         this.cameraOrigin = new Vector3();
         this.rasterFallbackRenderer = null;
         this.init();
@@ -267,14 +181,13 @@ class PathTracer {
         this.pathTracingMaterial = this.pathTracingQuad.material;
         this.outputMaterial = this.outputQuad.material;
 
-        this._setContants();
+        this._setConstants();
         this._setRenderTexture();
         this._setSceneTextureArrays();
-        this.setOriginMaterialInfo(null);
     }
 
     // set constants used inside shader
-    _setContants() {
+    _setConstants() {
         this.pathTracingMaterial.texelsPerTriangle = texelsPerTriangle;
         this.pathTracingMaterial.texelsPerBVHNode = texelsPerBVHNode;
         this.pathTracingMaterial.texelsPerMaterial = texelsPerMaterial;
@@ -345,56 +258,16 @@ class PathTracer {
     }
 
     _supportsTextureArrays() {
-        return this.renderer.capabilities.isWebGL2 === true;
+        return this.renderer.capabilities.isWebGL2;
     }
 
     // set bounces
     setBounce(maxBounce) {
-        this.pathTracingMaterial.maxBounce = Math.max(1, Math.min(maxBounce, 8));
+        this.pathTracingMaterial.maxBounce = Math.max(1, Math.min(maxBounce, maxPathBounces));
     }
 
-    setTransparentSteps(maxTransparentSteps) {
-        this.pathTracingMaterial.maxTransparentSteps = Math.max(1, Math.min(maxTransparentSteps, 8));
-    }
-
-    setEnvironmentMissMIS(enabled) {
-        const material = this.pathTracingMaterial;
-        const shouldEnable = enabled === true;
-        const isEnabled = material.defines?.ENABLE_ENV_MISS_MIS === 1;
-        if (shouldEnable === isEnabled) {
-            return;
-        }
-
-        if (shouldEnable) {
-            material.defines = {
-                ...material.defines,
-                ENABLE_ENV_MISS_MIS: 1,
-            };
-        } else if (material.defines) {
-            delete material.defines.ENABLE_ENV_MISS_MIS;
-        }
-
-        material.needsUpdate = true;
-    }
-
-    setDirectEnvironmentMIS(enabled) {
-        const material = this.pathTracingMaterial;
-        const shouldEnable = enabled === true;
-        const isEnabled = material.defines?.ENABLE_DIRECT_ENV_MIS === 1;
-        if (shouldEnable === isEnabled) {
-            return;
-        }
-
-        if (shouldEnable) {
-            material.defines = {
-                ...material.defines,
-                ENABLE_DIRECT_ENV_MIS: 1,
-            };
-        } else if (material.defines) {
-            delete material.defines.ENABLE_DIRECT_ENV_MIS;
-        }
-
-        material.needsUpdate = true;
+    setTransparentSteps(stepCount) {
+        this.pathTracingMaterial.maxTransparentSteps = Math.max(1, Math.min(stepCount, maxTransparentSteps));
     }
 
     // set hdr texture
@@ -403,35 +276,6 @@ class PathTracer {
         texture.magFilter = LinearFilter;
         texture.generateMipmaps = false;
         this.pathTracingMaterial.hdrTexture = texture;
-
-        if (this.hdrConditionalDistributionTexture) {
-            this.hdrConditionalDistributionTexture.dispose();
-            this.hdrConditionalDistributionTexture = null;
-        }
-        if (this.hdrMarginalDistributionTexture) {
-            this.hdrMarginalDistributionTexture.dispose();
-            this.hdrMarginalDistributionTexture = null;
-        }
-
-        const hdrDistribution = buildHdrImportanceDistribution(texture);
-        if (!hdrDistribution) {
-            this.pathTracingMaterial.hdrConditionalDistributionTexture = null;
-            this.pathTracingMaterial.hdrMarginalDistributionTexture = null;
-            this.pathTracingMaterial.hdrResolution = new Vector2(1, 1);
-            this.pathTracingMaterial.hdrTotalWeight = 0;
-            return;
-        }
-
-        this.hdrConditionalDistributionTexture = hdrDistribution.conditionalTexture;
-        this.hdrMarginalDistributionTexture = hdrDistribution.marginalTexture;
-        this.pathTracingMaterial.hdrConditionalDistributionTexture = this.hdrConditionalDistributionTexture;
-        this.pathTracingMaterial.hdrMarginalDistributionTexture = this.hdrMarginalDistributionTexture;
-        this.pathTracingMaterial.hdrResolution = new Vector2(hdrDistribution.width, hdrDistribution.height);
-        this.pathTracingMaterial.hdrTotalWeight = hdrDistribution.totalWeight;
-    }
-
-    setOriginMaterialInfo(materialInfo) {
-        return materialInfo;
     }
 
     setDebugMode(mode) {
@@ -448,6 +292,18 @@ class PathTracer {
 
     setOutputExposure(exposure) {
         this.outputMaterial.exposure = exposure;
+    }
+
+    setScene(compiledScene) {
+        if (!compiledScene || compiledScene.disposed) {
+            throw new Error('[PathTracing] setScene requires a live CompiledScene.');
+        }
+
+        this.setDataTexture(
+            compiledScene.triangle,
+            compiledScene.bvh,
+            compiledScene.material
+        );
     }
 
     // set Data texture
@@ -486,7 +342,7 @@ class PathTracer {
         width = ~~width;
         height = ~~height;
 
-        if (this.traceRenderTarget.width == width && this.traceRenderTarget.height == height) {
+        if (this.traceRenderTarget.width === width && this.traceRenderTarget.height === height) {
             return;
         }
 
@@ -495,10 +351,12 @@ class PathTracer {
         this.outRenderTarget.setSize(width, height);
 
         this.pathTracingMaterial.resolution = { x: width, y: height };
-        this.outputMaterial.resolution = { x: width, y: height };
     }
 
     update() {
+        if (this.disposed) {
+            return;
+        }
 
         if (!this.task) {
 
@@ -510,7 +368,7 @@ class PathTracer {
     }
 
     setRasterFallbackRenderer(callback) {
-        this.rasterFallbackRenderer = typeof callback === 'function' ? callback : null;
+        this.rasterFallbackRenderer = callback ?? null;
     }
 
     renderRasterFallback() {
@@ -528,11 +386,11 @@ class PathTracer {
     }
 
     setReady(ready) {
-        this.ready = ready === true;
+        this.ready = ready;
     }
 
     isReady() {
-        return this.ready === true;
+        return this.ready;
     }
 
     reset() {
@@ -552,6 +410,26 @@ class PathTracer {
 
         this.renderer.setClearColor(clearColor, clearAlpha);
         this.renderer.setRenderTarget(currentRenderTarget);
+    }
+
+    dispose() {
+        if (this.disposed) {
+            return;
+        }
+
+        this.disposed = true;
+        this.task = null;
+        this.ready = false;
+        this.rasterFallbackRenderer = null;
+
+        this._disposeSceneTextureArrays();
+        this.traceScene.remove(this.pathTracingQuad);
+        this.pathTracingQuad.geometry.dispose();
+        this.pathTracingMaterial.dispose();
+        this.outputMaterial.dispose();
+        this.outputQuad.dispose();
+        this.traceRenderTarget.dispose();
+        this.outRenderTarget.dispose();
     }
 
 }

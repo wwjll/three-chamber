@@ -68,14 +68,14 @@ class TrackEditor {
             ...(options.animation || {})
         };
 
-        const hasValidPoints = Array.isArray(options.points) && options.points.length >= 4;
+        const hasValidPoints = options.points?.length >= 4;
         this.points = hasValidPoints
             ? options.points.slice()
             : this.computeControlPoints(this.scene);
         this.splines = options.splines || {};
-        this.splinePoints = Array.isArray(options.splinePoints) ? options.splinePoints.slice() : [];
-        this.clipSplinePoints = Array.isArray(options.clipSplinePoints) ? options.clipSplinePoints.slice() : [];
-        this.controlSize = Number.isFinite(options.controlSize) ? options.controlSize : 0.5;
+        this.splinePoints = options.splinePoints?.slice() ?? [];
+        this.clipSplinePoints = options.clipSplinePoints?.slice() ?? [];
+        this.controlSize = options.controlSize ?? 0.5;
         this._ownsControlGroup = !options.controlGroup;
         this.controlGroup = options.controlGroup || new Group();
         if (this.scene && this.controlGroup.parent !== this.scene) {
@@ -88,7 +88,7 @@ class TrackEditor {
             this.controlSize
         );
         this._ownsControlMaterial = !options.controlMaterial;
-        const controlColor = Number.isFinite(options.controlColor) ? options.controlColor : Math.random() * 0xffffff;
+        const controlColor = options.controlColor ?? Math.random() * 0xffffff;
         this.controlMaterial = options.controlMaterial || new MeshLambertMaterial({ color: controlColor });
         this.dimension = options.dimension || null;
 
@@ -111,7 +111,7 @@ class TrackEditor {
             new Vector3(-2, 1, 2)
         ];
 
-        if (!scene || typeof scene.traverse !== 'function' || count <= 0) {
+        if (!scene || count <= 0) {
             return fallback.slice(0, Math.max(1, count)).map((p) => p.clone());
         }
 
@@ -221,10 +221,13 @@ class TrackEditor {
         orbitControls = null,
         controlGroup = this.controlGroup,
         interactionCamera = this.sceneCamera,
-        getSize = null,
-        onObjectChange = null,
-        onResize = null,
-        onRender = null
+        getSize = () => ({
+            width: windowTarget.innerWidth || 1,
+            height: windowTarget.innerHeight || 1,
+        }),
+        onObjectChange = () => {},
+        onResize = () => {},
+        onRender = () => {},
     } = {}) {
         this.unmountInteractions();
 
@@ -232,12 +235,8 @@ class TrackEditor {
             return this;
         }
 
-        const getViewportSize = typeof getSize === 'function'
-            ? getSize
-            : () => ({ width: windowTarget.innerWidth || 1, height: windowTarget.innerHeight || 1 });
-
         const updatePointer = (event) => {
-            const { width, height } = getViewportSize();
+            const { width, height } = getSize();
             const w = Math.max(1, width || 1);
             const h = Math.max(1, height || 1);
             this._interactionPointer.x = (event.clientX / w) * 2 - 1;
@@ -251,21 +250,13 @@ class TrackEditor {
         };
 
         const handleObjectChange = (event) => {
-            if (typeof onObjectChange === 'function') {
-                onObjectChange(event);
-            }
-            if (typeof onRender === 'function') {
-                onRender();
-            }
+            onObjectChange(event);
+            onRender();
         };
 
         const handleResize = () => {
-            if (typeof onResize === 'function') {
-                onResize();
-            }
-            if (typeof onRender === 'function') {
-                onRender();
-            }
+            onResize();
+            onRender();
         };
 
         const handleContextMenu = (event) => {
@@ -279,15 +270,11 @@ class TrackEditor {
                 this.transformControl.detach();
             }
 
-            if (typeof onRender === 'function') {
-                onRender();
-            }
+            onRender();
         };
 
         const handleMouseWheel = () => {
-            if (typeof onRender === 'function') {
-                onRender();
-            }
+            onRender();
         };
 
         const handleMouseMove = (event) => {
@@ -302,9 +289,7 @@ class TrackEditor {
                 }
             }
 
-            if (typeof onRender === 'function') {
-                onRender();
-            }
+            onRender();
         };
 
         this.transformControl.addEventListener('dragging-changed', handleDraggingChanged);
@@ -386,9 +371,6 @@ class TrackEditor {
     }
 
     forEachSpline(visitor) {
-        if (typeof visitor !== 'function') {
-            return this;
-        }
         for (const key in this.splines) {
             visitor(this.splines[key], key);
         }
@@ -417,14 +399,7 @@ class TrackEditor {
     }
 
     setCamera(partial = {}) {
-        // Allow partial update: setCamera({ near: 1 }) is valid.
-        if (Number.isFinite(partial.aspect)) this.cameraState.aspect = partial.aspect;
-        if (Number.isFinite(partial.fov)) this.cameraState.fov = partial.fov;
-        if (Number.isFinite(partial.near)) this.cameraState.near = partial.near;
-        if (Number.isFinite(partial.far)) this.cameraState.far = partial.far;
-        if (typeof partial.showHelper === 'boolean') this.cameraState.showHelper = partial.showHelper;
-        if (typeof partial.frustumCulling === 'boolean') this.cameraState.frustumCulling = partial.frustumCulling;
-
+        Object.assign(this.cameraState, partial);
         this._applyCameraState();
         return this;
     }
@@ -432,19 +407,17 @@ class TrackEditor {
     setCameraPose({ position, target, up } = {}) {
         if (!this.camera) return this;
 
-        if (position && typeof this.camera.position?.copy === 'function') {
+        if (position) {
             this.camera.position.copy(position);
         }
-        if (target && typeof this.camera.lookAt === 'function') {
+        if (target) {
             this.camera.lookAt(target);
         }
-        if (up && typeof this.camera.up?.copy === 'function') {
+        if (up) {
             this.camera.up.copy(up);
         }
 
-        if (typeof this.camera.updateProjectionMatrix === 'function') {
-            this.camera.updateProjectionMatrix();
-        }
+        this.camera.updateProjectionMatrix();
         this._syncCameraHelper();
         return this;
     }
@@ -452,19 +425,18 @@ class TrackEditor {
     setViewPort(partial = {}) {
         const wasEnabled = this.viewPort.enabled;
 
-        if (typeof partial.enabled === 'boolean') this.viewPort.enabled = partial.enabled;
-        if (Number.isFinite(partial.clearColor)) this.viewPort.clearColor = partial.clearColor;
-
-        const relative = partial.relative || {};
-        if (Number.isFinite(relative.left)) this.viewPort.relative.left = relative.left;
-        if (Number.isFinite(relative.top)) this.viewPort.relative.top = relative.top;
-        if (Number.isFinite(relative.width)) this.viewPort.relative.width = relative.width;
-        if (Number.isFinite(relative.height)) this.viewPort.relative.height = relative.height;
-
-        const border = partial.border || {};
-        if (typeof border.enabled === 'boolean') this.viewPort.border.enabled = border.enabled;
-        if (Number.isFinite(border.size)) this.viewPort.border.size = border.size;
-        if (Number.isFinite(border.color)) this.viewPort.border.color = border.color;
+        this.viewPort = {
+            ...this.viewPort,
+            ...partial,
+            relative: {
+                ...this.viewPort.relative,
+                ...partial.relative,
+            },
+            border: {
+                ...this.viewPort.border,
+                ...partial.border,
+            },
+        };
 
         if (wasEnabled && !this.viewPort.enabled) {
             this._cleanupViewPortSideEffects();
@@ -536,20 +508,17 @@ class TrackEditor {
     }
 
     setSpline(partial = {}) {
-        if (Number.isFinite(partial.tension)) this.splineState.tension = partial.tension;
-        if (Number.isFinite(partial.arcSegments)) this.splineState.arcSegments = partial.arcSegments;
-        if (typeof partial.curveType === 'string') this.splineState.curveType = partial.curveType;
-        if (typeof partial.showCurve === 'boolean') this.splineState.showCurve = partial.showCurve;
+        Object.assign(this.splineState, partial);
         return this;
     }
 
     setPoints(points = []) {
-        this.points = Array.isArray(points) ? points.slice() : [];
+        this.points = points.slice();
         return this;
     }
 
     setPointsFromControlGroup(controlGroup = this.controlGroup) {
-        if (!controlGroup || !Array.isArray(controlGroup.children)) {
+        if (!controlGroup) {
             this.points = [];
             return this;
         }
@@ -611,7 +580,7 @@ class TrackEditor {
         arcSegments = this.splineState.arcSegments,
         randomCount = 4
     } = {}) {
-        const nextPoints = Array.isArray(points) ? points.slice() : [];
+        const nextPoints = points.slice();
 
         if (nextPoints.length === 0) {
             const count = Math.max(1, randomCount || 4);
@@ -693,16 +662,12 @@ class TrackEditor {
         if (!cube) {
             return null;
         }
-        if (this.controlGroup && typeof this.controlGroup.remove === 'function') {
-            this.controlGroup.remove(cube);
-        }
+        this.controlGroup.remove(cube);
 
         if (this.transformControl?.object && cube.uuid === this.transformControl.object.uuid) {
             this.transformControl.detach();
         }
-        if (typeof cube.dispose === 'function') {
-            cube.dispose();
-        }
+        cube.dispose?.();
         return cube;
     }
 
@@ -879,7 +844,7 @@ class TrackEditor {
                 height: scale
             }
         };
-        if (Number.isFinite(clearColor)) {
+        if (clearColor !== undefined) {
             partial.clearColor = clearColor;
         }
         return this.setViewPort(partial);
@@ -952,16 +917,12 @@ class TrackEditor {
             this.resume();
             const value = step();
             if (value) {
-                if (typeof onFrame === 'function') {
-                    onFrame(value);
-                }
+                onFrame?.(value);
                 return;
             }
 
             this.stopAnimationLoop();
-            if (typeof onComplete === 'function') {
-                onComplete();
-            }
+            onComplete?.();
         };
 
         this.animationRequestId = requestAnimationFrame(tick);
@@ -969,11 +930,11 @@ class TrackEditor {
     }
 
     setAnimation(partial = {}) {
-        if (typeof partial.easing === 'string') this.animationState.easing = partial.easing;
-        if (typeof partial.easingType === 'string') this.animationState.easingType = partial.easingType;
-        if (Number.isFinite(partial.stride)) this.animationState.stride = partial.stride;
-        if (typeof partial.pause === 'boolean') this.animationState.pause = partial.pause;
-        if (Number.isFinite(partial.progress)) this.animationState.progress = Math.min(1, Math.max(0, partial.progress));
+        Object.assign(this.animationState, partial);
+        this.animationState.progress = Math.min(
+            1,
+            Math.max(0, this.animationState.progress),
+        );
         return this;
     }
 
@@ -983,9 +944,7 @@ class TrackEditor {
             ? easingGroupRaw()
             : easingGroupRaw;
         const easingFn = easingGroup?.[this.animationState.easingType] || easingGroup?.None || ((t) => t);
-        const stride = Number.isFinite(this.animationState.stride) && this.animationState.stride > 0
-            ? this.animationState.stride
-            : DEFAULT_ANIMATION.stride;
+        const stride = this.animationState.stride;
 
         let progress = this.animationState.progress;
         while (progress <= 1) {
@@ -1053,10 +1012,10 @@ class TrackEditor {
         if (this._ownsControlGroup && this.controlGroup && this.scene && this.controlGroup.parent === this.scene) {
             this.scene.remove(this.controlGroup);
         }
-        if (this._ownsControlGeometry && this.controlGeometry && typeof this.controlGeometry.dispose === 'function') {
+        if (this._ownsControlGeometry && this.controlGeometry) {
             this.controlGeometry.dispose();
         }
-        if (this._ownsControlMaterial && this.controlMaterial && typeof this.controlMaterial.dispose === 'function') {
+        if (this._ownsControlMaterial && this.controlMaterial) {
             this.controlMaterial.dispose();
         }
 
@@ -1085,22 +1044,18 @@ class TrackEditor {
         this.camera.fov = this.cameraState.fov;
         this.camera.near = this.cameraState.near;
         this.camera.far = this.cameraState.far;
-        if (typeof this.camera.updateProjectionMatrix === 'function') {
-            this.camera.updateProjectionMatrix();
-        }
+        this.camera.updateProjectionMatrix();
         this._syncCameraHelper();
     }
 
     _syncCameraHelper() {
         if (!this.cameraHelper) return;
         this.cameraHelper.visible = !!this.cameraState.showHelper;
-        if (typeof this.cameraHelper.update === 'function') {
-            this.cameraHelper.update();
-        }
+        this.cameraHelper.update();
     }
 
     _cleanupViewPortSideEffects() {
-        if (this.renderer && typeof this.renderer.setScissorTest === 'function') {
+        if (this.renderer) {
             this.renderer.setScissorTest(false);
         }
     }

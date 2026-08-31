@@ -37,24 +37,89 @@
  */
 import { Quaternion, Vector3 } from 'three';
 
+function solveLinearSystem(
+    matrix,
+    vector,
+    output = new Array(vector.length),
+    augmented = [],
+) {
+    const size = vector.length;
+    for (let row = 0; row < size; row++) {
+        const augmentedRow = augmented[row] ?? [];
+        augmented[row] = augmentedRow;
+        for (let column = 0; column < size; column++) {
+            augmentedRow[column] = matrix[row][column];
+        }
+        augmentedRow[size] = vector[row];
+        augmentedRow.length = size + 1;
+    }
+    augmented.length = size;
+
+    for (let column = 0; column < size; column++) {
+        let pivotRow = column;
+        for (let row = column + 1; row < size; row++) {
+            if (
+                Math.abs(augmented[row][column])
+                > Math.abs(augmented[pivotRow][column])
+            ) {
+                pivotRow = row;
+            }
+        }
+        if (Math.abs(augmented[pivotRow][column]) < 1e-12) {
+            return null;
+        }
+        [augmented[column], augmented[pivotRow]] = [
+            augmented[pivotRow],
+            augmented[column],
+        ];
+
+        const pivot = augmented[column][column];
+        for (let entry = column; entry <= size; entry++) {
+            augmented[column][entry] /= pivot;
+        }
+        for (let row = 0; row < size; row++) {
+            if (row === column) {
+                continue;
+            }
+            const factor = augmented[row][column];
+            for (let entry = column; entry <= size; entry++) {
+                augmented[row][entry] -= factor * augmented[column][entry];
+            }
+        }
+    }
+    output.length = size;
+    for (let row = 0; row < size; row++) {
+        output[row] = augmented[row][size];
+    }
+    return output;
+}
+
 class ChainSolver {
     constructor(options = {}) {
-        this.targetPosition = options.targetPosition instanceof Vector3
-            ? options.targetPosition.clone()
-            : new Vector3();
-        this.targetQuaternion = options.targetQuaternion instanceof Quaternion
-            ? options.targetQuaternion.clone()
-            : new Quaternion();
+        this.targetPosition = options.targetPosition?.clone() ?? new Vector3();
+        this.targetQuaternion = options.targetQuaternion?.clone()
+            ?? new Quaternion();
         this.chain = options.chain ?? null;
-        this.maxIter = Number.isFinite(options.maxIter) ? options.maxIter : 20;
-        this.alpha = Number.isFinite(options.alpha) ? options.alpha : 0.05;
-        this.tolerance = Number.isFinite(options.tolerance) ? options.tolerance : 1e-3;
+        this.maxIter = options.maxIter ?? 20;
+        this.alpha = options.alpha ?? 0.05;
+        this.tolerance = options.tolerance ?? 1e-3;
         this.solveMode = options.solveMode === 'Position + Rotation'
             ? 'Position + Rotation'
             : 'Position Only';
-        this.debug = options.debug === true;
-        this.joints = Array.isArray(options.joints) ? options.joints : null;
-        this.thetaOffsets = Array.isArray(options.thetaOffsets) ? options.thetaOffsets.slice() : [];
+        this.solverMethod = options.solverMethod === 'DLS'
+            ? 'DLS'
+            : 'Jacobian';
+        this.damping = Math.max(1e-5, options.damping ?? 0.04);
+        this.dlsMaxDelta = Math.max(1e-4, options.dlsMaxDelta ?? 0.08);
+        this.rotationWeight = Math.max(0, options.rotationWeight ?? 0.25);
+        this.rotationTolerance = Math.max(
+            1e-6,
+            options.rotationTolerance ?? 0.03,
+        );
+        this.lastIterationCount = 0;
+        this.debug = options.debug ?? false;
+        this.joints = options.joints ?? null;
+        this.thetaOffsets = options.thetaOffsets?.slice() ?? [];
         this._tmp = {
             p: new Vector3(),
             pi: new Vector3(),
@@ -68,31 +133,41 @@ class ChainSolver {
             deltaQuat: new Quaternion(),
             errorVec6: [0, 0, 0, 0, 0, 0],
         };
+        this._dlsScratch = {
+            rowWeights: [1, 1, 1, 1, 1, 1],
+            rawError: new Array(6),
+            weightedError: new Array(6),
+            jacobian: Array.from({ length: 6 }, () => []),
+            weightedJacobian: Array.from({ length: 6 }, () => []),
+            normalMatrix: Array.from({ length: 6 }, () => new Array(6)),
+            augmented: Array.from({ length: 6 }, () => new Array(7)),
+            taskStep: new Array(6),
+            candidate: [],
+            deltas: [],
+        };
 
-        if (typeof options.forwardKinematics === 'function') {
-            this.forwardKinematics = options.forwardKinematics;
-        }
+        this.forwardKinematics = options.forwardKinematics ?? null;
     }
 
     buildJointLimits(count) {
         const limits = new Array(count);
         const toRad = Math.PI / 180;
-        const joints = Array.isArray(this.joints) && this.joints.length > 0
+        const joints = this.joints?.length > 0
             ? this.joints
-            : (Array.isArray(this.chain?.joints) ? this.chain.joints : []);
+            : this.chain?.joints ?? [];
 
         for (let i = 0; i < count; i++) {
             const joint = joints[i];
-            const minAngleDeg = Number.isFinite(joint?.minAngle) ? joint.minAngle : null;
-            const maxAngleDeg = Number.isFinite(joint?.maxAngle) ? joint.maxAngle : null;
-            if (!Number.isFinite(minAngleDeg) || !Number.isFinite(maxAngleDeg)) {
+            const minAngleDeg = joint?.minAngle ?? null;
+            const maxAngleDeg = joint?.maxAngle ?? null;
+            if (minAngleDeg === null || maxAngleDeg === null) {
                 limits[i] = null;
                 continue;
             }
 
-            const thetaOffset = Number.isFinite(joint?.dh?.thetaOffset)
-                ? joint.dh.thetaOffset
-                : (Number.isFinite(this.thetaOffsets[i]) ? this.thetaOffsets[i] : 0);
+            const thetaOffset = joint?.dh?.thetaOffset
+                ?? this.thetaOffsets[i]
+                ?? 0;
             const qMin = minAngleDeg * toRad - thetaOffset;
             const qMax = maxAngleDeg * toRad - thetaOffset;
             // Keep min/max ordering as-is:
@@ -115,7 +190,7 @@ class ChainSolver {
 
     clampJointValue(value, limit) {
         if (!limit) return value;
-        if (limit.wrap !== true) {
+        if (!limit.wrap) {
             if (value < limit.min) return limit.min;
             if (value > limit.max) return limit.max;
             return value;
@@ -140,9 +215,7 @@ class ChainSolver {
     }
 
     computeTaskError(q) {
-        if (typeof this.forwardKinematics === 'function') {
-            this.forwardKinematics(q);
-        }
+        this.forwardKinematics?.(q);
         const endEffectorPosition = this.chain?.getActuatorWorldPosition?.(this._tmp.p)
             ?? this._tmp.p.set(0, 0, 0);
         const posErr = this._tmp.posErr.copy(this.targetPosition).sub(endEffectorPosition);
@@ -195,11 +268,18 @@ class ChainSolver {
         return this.computePositionError(q).length();
     }
 
-    computeJacobianAnalytic(q) {
+    computeJacobianAnalytic(q, output = null) {
         // Analytic Jacobian for revolute joints:
         // J = [Jv_i, Jw_i], Jv_i = a_i x (p - p_i), Jw_i = a_i.
         const n = q.length;
-        const jacobian = [new Array(n), new Array(n), new Array(n), new Array(n), new Array(n), new Array(n)];
+        const jacobian = output ?? Array.from(
+            { length: 6 },
+            () => new Array(n),
+        );
+        for (let row = 0; row < 6; row++) {
+            jacobian[row] ??= [];
+            jacobian[row].length = n;
+        }
         const joints = this.joints || [];
         const endEffectorPosition = this.chain?.getActuatorWorldPosition?.(this._tmp.p)
             ?? this._tmp.p.set(0, 0, 0);
@@ -212,9 +292,9 @@ class ChainSolver {
         for (let i = 0; i < n; i++) {
             const joint = joints[i];
             if (!joint) {
-                jacobian[0][i] = 0;
-                jacobian[1][i] = 0;
-                jacobian[2][i] = 0;
+                for (let row = 0; row < 6; row++) {
+                    jacobian[row][i] = 0;
+                }
                 continue;
             }
 
@@ -256,13 +336,154 @@ class ChainSolver {
         return jacobian;
     }
 
+    solveDampedLeastSquares(qe, options = {}) {
+        const maxIter = Math.max(1, options.maxIter ?? this.maxIter);
+        const maxDelta = Math.max(
+            1e-4,
+            options.maxDelta ?? this.dlsMaxDelta,
+        );
+        const rotationWeight = Math.max(
+            0,
+            options.rotationWeight ?? this.rotationWeight,
+        );
+        const positionTolerance = Math.max(
+            1e-6,
+            options.positionTolerance ?? this.tolerance,
+        );
+        const rotationTolerance = Math.max(
+            1e-6,
+            options.rotationTolerance ?? this.rotationTolerance,
+        );
+        let damping = Math.max(1e-5, options.damping ?? this.damping);
+        const q = qe.slice();
+        this.lastIterationCount = 0;
+        const jointLimits = this.buildJointLimits(q.length);
+        const rowCount = this.isPositionAndRotationMode() ? 6 : 3;
+        const scratch = this._dlsScratch;
+        const {
+            rowWeights,
+            rawError,
+            weightedError,
+            jacobian,
+            weightedJacobian,
+            normalMatrix,
+            augmented,
+            taskStep,
+            candidate,
+            deltas,
+        } = scratch;
+        rowWeights[3] = rotationWeight;
+        rowWeights[4] = rotationWeight;
+        rowWeights[5] = rotationWeight;
+        weightedError.length = rowCount;
+        candidate.length = q.length;
+        deltas.length = q.length;
+        for (let row = 0; row < rowCount; row++) {
+            weightedJacobian[row].length = q.length;
+            normalMatrix[row].length = rowCount;
+        }
+        for (let index = 0; index < q.length; index++) {
+            q[index] = this.clampJointValue(q[index], jointLimits[index]);
+        }
+
+        for (let iteration = 0; iteration < maxIter; iteration++) {
+            this.lastIterationCount = iteration + 1;
+            const { posErr, rotErr } = this.computeTaskError(q);
+            if (
+                posErr.length() <= positionTolerance
+                && (
+                    !this.isPositionAndRotationMode()
+                    || rotErr.length() <= rotationTolerance
+                )
+            ) {
+                break;
+            }
+
+            rawError[0] = posErr.x;
+            rawError[1] = posErr.y;
+            rawError[2] = posErr.z;
+            rawError[3] = rotErr.x;
+            rawError[4] = rotErr.y;
+            rawError[5] = rotErr.z;
+            this.computeJacobianAnalytic(q, jacobian);
+            for (let row = 0; row < rowCount; row++) {
+                const rowWeight = rowWeights[row];
+                weightedError[row] = rawError[row] * rowWeight;
+                for (let joint = 0; joint < q.length; joint++) {
+                    weightedJacobian[row][joint]
+                        = jacobian[row][joint] * rowWeight;
+                }
+            }
+            for (let row = 0; row < rowCount; row++) {
+                for (let column = 0; column < rowCount; column++) {
+                    let sum = row === column ? damping * damping : 0;
+                    for (let joint = 0; joint < q.length; joint++) {
+                        sum += weightedJacobian[row][joint]
+                            * weightedJacobian[column][joint];
+                    }
+                    normalMatrix[row][column] = sum;
+                }
+            }
+            if (!solveLinearSystem(
+                normalMatrix,
+                weightedError,
+                taskStep,
+                augmented,
+            )) {
+                break;
+            }
+
+            let largestDelta = 0;
+            for (let joint = 0; joint < q.length; joint++) {
+                let delta = 0;
+                for (let row = 0; row < rowCount; row++) {
+                    delta += weightedJacobian[row][joint] * taskStep[row];
+                }
+                deltas[joint] = delta;
+                largestDelta = Math.max(largestDelta, Math.abs(delta));
+            }
+            const deltaScale = largestDelta > maxDelta
+                ? maxDelta / largestDelta
+                : 1;
+            for (let joint = 0; joint < q.length; joint++) {
+                candidate[joint] = this.clampJointValue(
+                    q[joint] + deltas[joint] * deltaScale,
+                    jointLimits[joint],
+                );
+            }
+
+            const currentScore = posErr.lengthSq()
+                + rotationWeight * rotationWeight * rotErr.lengthSq();
+            const candidateError = this.computeTaskError(candidate);
+            const candidateScore = candidateError.posErr.lengthSq()
+                + rotationWeight * rotationWeight * candidateError.rotErr.lengthSq();
+            if (candidateScore <= currentScore) {
+                for (let joint = 0; joint < q.length; joint++) {
+                    q[joint] = candidate[joint];
+                }
+                damping = Math.max(1e-5, damping * 0.8);
+            } else {
+                damping = Math.min(1, damping * 2);
+            }
+        }
+        this.forwardKinematics?.(q);
+        return q;
+    }
+
     solve(qe) {
+        if (this.solverMethod === 'DLS') {
+            return this.solveDampedLeastSquares(qe);
+        }
+        return this.solveJacobianTranspose(qe);
+    }
+
+    solveJacobianTranspose(qe) {
         // Iteration controls and safety limits.
         // maxRetry + alphaTry implement a simple backtracking line-search.
         // maxDelta limits single-joint jump size per trial step.
-        const maxIter = Number.isFinite(this.maxIter) ? this.maxIter : 20;
-        let alpha = Number.isFinite(this.alpha) ? this.alpha : 0.05;
-        const tolerance = Number.isFinite(this.tolerance) ? this.tolerance : 1e-3;
+        const maxIter = this.maxIter;
+        let alpha = this.alpha;
+        const tolerance = this.tolerance;
         const maxRetry = 5;
         const maxDelta = 0.05;
         const improveTol = 1e-9;
@@ -270,6 +491,7 @@ class ChainSolver {
         const maxAlpha = 0.2;
         // Work on a copy so caller state is only replaced by the returned solution.
         const q = qe.slice();
+        this.lastIterationCount = 0;
         const jointLimits = this.buildJointLimits(q.length);
         for (let i = 0; i < q.length; i++) {
             q[i] = this.clampJointValue(q[i], jointLimits[i]);
@@ -278,6 +500,7 @@ class ChainSolver {
         const includeRotation = this.isPositionAndRotationMode();
 
         for (let iter = 0; iter < maxIter; iter++) {
+            this.lastIterationCount = iter + 1;
             // Build 6D task error: [ex, ey, ez, erx, ery, erz].
             // In position-only mode we explicitly clear rotational components.
             const { posErr, rotErr } = this.computeTaskError(q);

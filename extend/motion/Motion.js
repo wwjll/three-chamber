@@ -34,7 +34,7 @@ class TowerMotionController {
         }
         this.setConfig(options);
 
-        if (Array.isArray(options.floors) && options.floors.length > 0) {
+        if (options.floors?.length > 0) {
             this.bindFloors(options.floors, options.floorNumbers);
         }
     }
@@ -50,8 +50,8 @@ class TowerMotionController {
          *   - userData.progress: number in [0, 1], normalized animation progress.
          * The controller will initialize/overwrite originY/status/progress to ensure deterministic animation state.
          */
-        this.floors = Array.isArray(floors) ? floors : [];
-        this.floorNumbers = Array.isArray(floorNumbers) && floorNumbers.length > 0
+        this.floors = floors;
+        this.floorNumbers = floorNumbers?.length > 0
             ? floorNumbers.slice()
             : this.floors.map((floor, index) => {
                 const rawName = floor?.userData?.name;
@@ -66,7 +66,7 @@ class TowerMotionController {
             if (!floor.userData) {
                 floor.userData = {};
             }
-            floor.userData.originY = Number.isFinite(floor.position?.y) ? floor.position.y : 0;
+            floor.userData.originY = floor.position.y;
             floor.userData.status = 'normal';
             floor.userData.progress = 0;
         });
@@ -76,29 +76,27 @@ class TowerMotionController {
     }
 
     setConfig(partial = {}) {
-        if (Number.isFinite(partial.distance)) this.config.distance = partial.distance;
-        if (Number.isFinite(partial.frameRate)) this.config.frameRate = Math.max(1, partial.frameRate);
-        if (Number.isFinite(partial.duration)) this.config.duration = Math.max(1e-4, partial.duration);
-        if (Number.isFinite(partial.scale)) {
+        this.config.distance = partial.distance ?? this.config.distance;
+        this.config.frameRate = Math.max(
+            1,
+            partial.frameRate ?? this.config.frameRate,
+        );
+        this.config.duration = Math.max(
+            1e-4,
+            partial.duration ?? this.config.duration,
+        );
+        if (partial.scale !== undefined) {
             const safeScale = Math.max(1e-6, partial.scale);
             this.config.duration = 1 / (this.config.frameRate * safeScale);
         }
-        if (typeof partial.easingName === 'string') this.config.easingName = partial.easingName;
-        if (typeof partial.easingType === 'string') this.config.easingType = partial.easingType;
-        if (typeof partial.allowQueue === 'boolean') this.config.allowQueue = partial.allowQueue;
+        this.config.easingName = partial.easingName ?? this.config.easingName;
+        this.config.easingType = partial.easingType ?? this.config.easingType;
+        this.config.allowQueue = partial.allowQueue ?? this.config.allowQueue;
         return this;
     }
 
     setCallbacks(callbacks = {}) {
-        if (typeof callbacks.onStart === 'function' || callbacks.onStart === null) {
-            this.callbacks.onStart = callbacks.onStart;
-        }
-        if (typeof callbacks.onFinish === 'function' || callbacks.onFinish === null) {
-            this.callbacks.onFinish = callbacks.onFinish;
-        }
-        if (typeof callbacks.onStep === 'function' || callbacks.onStep === null) {
-            this.callbacks.onStep = callbacks.onStep;
-        }
+        Object.assign(this.callbacks, callbacks);
         return this;
     }
 
@@ -169,13 +167,11 @@ class TowerMotionController {
         }
 
         const finished = floorGroups.every((floor) => floor.userData.progress === 1);
-        if (typeof this.callbacks.onStep === 'function') {
-            this.callbacks.onStep({
-                finished,
-                direction,
-                groupCount: floorGroups.length
-            });
-        }
+        this.callbacks.onStep?.({
+            finished,
+            direction,
+            groupCount: floorGroups.length
+        });
 
         if (finished) {
             this._finishActiveAnimation();
@@ -284,21 +280,17 @@ class TowerMotionController {
             easingEval: this._resolveEasing(this.config.easingName, this.config.easingType)
         };
 
-        if (typeof this.callbacks.onStart === 'function') {
-            this.callbacks.onStart({
-                direction,
-                groupCount: floorGroups.length
-            });
-        }
+        this.callbacks.onStart?.({
+            direction,
+            groupCount: floorGroups.length
+        });
     }
 
     _finishActiveAnimation() {
         this.activeAnimation = null;
         this.status = 'idle';
 
-        if (typeof this.callbacks.onFinish === 'function') {
-            this.callbacks.onFinish();
-        }
+        this.callbacks.onFinish?.();
 
         if (this.pendingLevels.length > 0) {
             const nextLevel = this.pendingLevels.shift();
@@ -326,12 +318,12 @@ class TowerMotionController {
         let easingEval = (t) => t;
         let easingGroup = TWEEN.Easing[easingName];
 
-        if (easingName === 'generatePow' && typeof easingGroup === 'function') {
+        if (easingName === 'generatePow') {
             easingGroup = easingGroup();
         }
-        if (easingGroup && typeof easingGroup[easingType] === 'function') {
+        if (easingGroup?.[easingType]) {
             easingEval = easingGroup[easingType].bind(easingGroup);
-        } else if (easingGroup && typeof easingGroup.None === 'function') {
+        } else if (easingGroup?.None) {
             easingEval = easingGroup.None.bind(easingGroup);
         }
         return easingEval;

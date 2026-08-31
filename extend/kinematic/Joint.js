@@ -5,7 +5,7 @@ import {
     Quaternion,
     Vector3,
 } from 'three';
-import { DOFHelper } from './Helper.js';
+import { DOFHelper } from './DOFHelper.js';
 
 const DEFAULT_JOINT_AXIS = new Vector3(0, 0, 1);
 const _worldQuat = new Quaternion();
@@ -32,8 +32,8 @@ class Joint extends Object3D {
     }
 
     setLimit(minAngle, maxAngle) {
-        if (Number.isFinite(minAngle)) this.minAngle = minAngle;
-        if (Number.isFinite(maxAngle)) this.maxAngle = maxAngle;
+        if (minAngle !== undefined) this.minAngle = minAngle;
+        if (maxAngle !== undefined) this.maxAngle = maxAngle;
     }
 
     applyJointDH(theta, d, a, alpha) {
@@ -53,7 +53,7 @@ class Joint extends Object3D {
         // full transform is Rx(alpha) * Tx(a) * Rz(theta) * Tz(d),
         // while this joint node applies Rz(theta) and Tz(d).
         const m = new Matrix4().makeRotationZ(theta);
-        m.setPosition(0, 0, Number.isFinite(d) ? d : 0);
+        m.setPosition(0, 0, d ?? 0);
         this.matrix.copy(m);
 
         this.mdh = { theta, d };
@@ -63,22 +63,22 @@ class Joint extends Object3D {
         // Heuristic used by helpers for "relative" sizing.
         // Prefer link offset (child Link) if available.
         const child = this.children.find((c) => c && c.isLink);
-        if (child && child.matrix && Array.isArray(child.matrix.elements)) {
+        if (child) {
             const e = child.matrix.elements;
             // Matrix4 elements[12..14] are the translation (tx, ty, tz) in column-major order.
-            const tx = e[12] || 0;
-            const ty = e[13] || 0;
-            const tz = e[14] || 0;
+            const tx = e[12];
+            const ty = e[13];
+            const tz = e[14];
             // Use the translation length as a proxy for link length from this joint to its child.
             const len = Math.sqrt(tx * tx + ty * ty + tz * tz);
-            if (Number.isFinite(len) && len > 0) return len;
+            if (len > 0) return len;
         }
 
-        if (this.dh && (Number.isFinite(this.dh.a) || Number.isFinite(this.dh.d))) {
-            const a = Number.isFinite(this.dh.a) ? this.dh.a : 0;
-            const d = Number.isFinite(this.dh.d) ? this.dh.d : 0;
+        if (this.dh) {
+            const a = this.dh.a ?? 0;
+            const d = this.dh.d ?? 0;
             const len = Math.sqrt(a * a + d * d);
-            if (Number.isFinite(len) && len > 0) return len;
+            if (len > 0) return len;
         }
 
         return 1;
@@ -87,7 +87,7 @@ class Joint extends Object3D {
     toggleAxisHelper(visible, options = {}) {
         if (!this.helpers) this.helpers = {};
 
-        const requestedSize = Number.isFinite(options.size) ? options.size : null;
+        const requestedSize = options.size ?? null;
         const fallbackSize = this.getAutoSize() * 0.25;
         const nextSize = requestedSize === null ? fallbackSize : requestedSize;
 
@@ -96,7 +96,7 @@ class Joint extends Object3D {
             this.helpers.axis.userData.size = nextSize;
             this.helpers.axis.visible = false;
             this.add(this.helpers.axis);
-        } else if (Number.isFinite(nextSize) && this.helpers.axis.userData.size !== nextSize) {
+        } else if (this.helpers.axis.userData.size !== nextSize) {
             this.helpers.axis.geometry.dispose();
             this.helpers.axis.material.dispose();
             this.remove(this.helpers.axis);
@@ -106,7 +106,7 @@ class Joint extends Object3D {
             this.add(this.helpers.axis);
         }
 
-        if (typeof visible === 'boolean') {
+        if (visible !== undefined) {
             this.helpers.axis.visible = visible;
         } else {
             this.helpers.axis.visible = !this.helpers.axis.visible;
@@ -119,7 +119,7 @@ class Joint extends Object3D {
         if (!this.helpers) this.helpers = {};
 
         if (!this.helpers.DOF) {
-            if (typeof visible === 'boolean' && visible === false) {
+            if (visible === false) {
                 return null;
             }
 
@@ -127,12 +127,11 @@ class Joint extends Object3D {
             this.helpers.DOF.visible = false;
             this.helpers.DOF.matrixAutoUpdate = false;
             this.add(this.helpers.DOF);
-        } else if (options && typeof options === 'object') {
+        } else {
             Object.assign(this.helpers.DOF.config, options);
         }
 
-        const nextVisible =
-            typeof visible === 'boolean' ? visible : !this.helpers.DOF.visible;
+        const nextVisible = visible ?? !this.helpers.DOF.visible;
         this.helpers.DOF.visible = nextVisible;
 
         if (nextVisible) {

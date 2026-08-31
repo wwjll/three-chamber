@@ -34,8 +34,8 @@ class Link extends Object3D {
             return;
         }
 
-        const canAttachJoint = child.isJoint === true;
-        const canAttachLink = this.isBase === true && child.isLink === true;
+        const canAttachJoint = child.isJoint;
+        const canAttachLink = this.isBase && child.isLink;
 
         if (canAttachJoint || canAttachLink) {
             this.add(child);

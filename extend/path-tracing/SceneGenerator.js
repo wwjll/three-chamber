@@ -1,12 +1,55 @@
-import { ClampToEdgeWrapping, Color, DataTexture, DoubleSide, FloatType, NearestFilter, NoColorSpace, RGBAFormat, Texture, Vector2, Vector3 } from 'three';
+import { ClampToEdgeWrapping, Color, DataTexture, DoubleSide, Float32BufferAttribute, FloatType, NearestFilter, NoColorSpace, RGBAFormat, Texture, Vector2, Vector3 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 
 import {
     texelsPerTriangle,
     texelsPerBVHNode,
     texelsPerMaterial,
-    fixedDataTextureWidth
-} from './Constants'
+    fixedDataTextureWidth,
+    bvhLeafSize,
+} from './Constants.js'
+import { gpuSceneLayout } from './GpuSceneLayout.js'
+
+const geometryAttributeAccessors = ['getX', 'getY', 'getZ', 'getW'];
+
+function copyFloatAttribute(attribute, itemSize, count) {
+    const values = new Float32Array(count * itemSize);
+    if (attribute && attribute.count === count) {
+        for (let vertexIndex = 0; vertexIndex < count; vertexIndex++) {
+            for (let componentIndex = 0; componentIndex < itemSize; componentIndex++) {
+                values[vertexIndex * itemSize + componentIndex] =
+                    attribute[geometryAttributeAccessors[componentIndex]](vertexIndex);
+            }
+        }
+    }
+
+    return new Float32BufferAttribute(values, itemSize);
+}
+
+function normalizeGeometryForEncoding(geometry) {
+    const position = geometry.getAttribute('position');
+    if (!position || position.itemSize < 3) {
+        throw new Error('[PathTracing] Mesh geometry requires a vec3 position attribute.');
+    }
+
+    if (!geometry.getAttribute('normal')) {
+        geometry.computeVertexNormals();
+    }
+
+    const vertexCount = position.count;
+    geometry.setAttribute('position', copyFloatAttribute(geometry.getAttribute('position'), 3, vertexCount));
+    geometry.setAttribute('normal', copyFloatAttribute(geometry.getAttribute('normal'), 3, vertexCount));
+    geometry.setAttribute('uv', copyFloatAttribute(geometry.getAttribute('uv'), 2, vertexCount));
+
+    Object.keys(geometry.attributes).forEach((attributeName) => {
+        if (!['position', 'normal', 'uv'].includes(attributeName)) {
+            geometry.deleteAttribute(attributeName);
+        }
+    });
+    geometry.morphAttributes = {};
+
+    return geometry;
+}
 
 class Triangle {
     constructor(v1, v2, v3, n1, n2, n3, uv1, uv2, uv3, materialIndex = 0) {
@@ -63,7 +106,7 @@ class BVHNode {
 
 class BVHBuilder {
 
-    constructor(geometry, materialIndices = [], leafSize = 8) {
+    constructor(geometry, materialIndices = [], leafSize = bvhLeafSize) {
         this.position = geometry.attributes.position.array;
         if (!geometry.attributes.normal) {
             geometry.computeVertexNormals();
@@ -231,7 +274,7 @@ class BVHBuilder {
             // calculate the all possible pair of leftAABB and rightAABB
             for (let i = left; i <= right; ++i) {
                 let t = this.triangles[i];
-                let bias = (i == left) ? 0 : 1;
+                let bias = (i === left) ? 0 : 1;
                 leftMax[i - left].x = Math.max(leftMax[i - left - bias].x, Math.max(t.p1.x, Math.max(t.p2.x, t.p3.x)));
                 leftMax[i - left].y = Math.max(leftMax[i - left - bias].y, Math.max(t.p1.y, Math.max(t.p2.y, t.p3.y)));
                 leftMax[i - left].z = Math.max(leftMax[i - left - bias].z, Math.max(t.p1.z, Math.max(t.p2.z, t.p3.z)));
@@ -285,7 +328,9 @@ class BVHBuilder {
     }
 
     buildRecursiveMedian(left, right) {
-        if (left > right) return;
+        if (left > right) {
+            return;
+        }
 
         let node = this.createNode(left, right);
 
@@ -308,7 +353,9 @@ class BVHBuilder {
 
     buildRecursiveSAH(left, right) {
 
-        if (left > right) return;
+        if (left > right) {
+            return;
+        }
         let node = this.createNode(left, right);
 
         node.isLeaf = false;
@@ -356,10 +403,10 @@ class BVHBuilder {
 
             let node = this.createNode(left, right);
             if (lastNode) {
-                if (flag == "left") {
+                if (flag === "left") {
                     lastNode.left = node.id;
                 }
-                else if (flag == "right") {
+                else if (flag === "right") {
                     lastNode.right = node.id;
                 }
             }
@@ -520,6 +567,7 @@ class SceneGenerator {
             if (child.isMesh && (!this.meshFilter || this.meshFilter(child))) {
                 const geometry = child.geometry.clone().toNonIndexed();
                 geometry.applyMatrix4(child.matrixWorld);
+                normalizeGeometryForEncoding(geometry);
 
                 const triangleCount = geometry.attributes.position.array.length / 9;
                 const materialIndices = new Array(triangleCount).fill(0);
@@ -548,9 +596,20 @@ class SceneGenerator {
             throw new Error('[PathTracing] No meshes matched the SceneGenerator filter.');
         }
 
-        const mergedGeometry = mergeGeometries(this.geometries, false);
         const mergedMaterialIndices = this.geometryMaterialIndices.flat();
-        const builder = new BVHBuilder(mergedGeometry, mergedMaterialIndices);
+        let mergedGeometry = null;
+        let builder;
+        try {
+            mergedGeometry = mergeGeometries(this.geometries, false);
+            if (!mergedGeometry) {
+                throw new Error('[PathTracing] Failed to merge normalized scene geometry.');
+            }
+            builder = new BVHBuilder(mergedGeometry, mergedMaterialIndices);
+        } finally {
+            this.geometries.forEach((geometry) => geometry.dispose());
+            this.geometries.length = 0;
+            mergedGeometry?.dispose();
+        }
 
         builder.build();
 
@@ -558,11 +617,11 @@ class SceneGenerator {
 
         const texelWidth = fixedDataTextureWidth;
         let totalTexels = texelsPerTriangle * totalTriangles;
-        let texelHeight = ~~Math.pow(2, Math.log2(totalTexels / texelWidth)) + 1;
+        let texelHeight = Math.max(1, Math.ceil(totalTexels / texelWidth));
         const th = texelHeight;
 
         let triangleArray = new Float32Array(texelWidth * texelHeight * 4);
-        let stride = 32;
+        let stride = gpuSceneLayout.triangle.stride;
 
         // Triangles Data Texture
         for (let i = 0; i < totalTriangles; ++i) {
@@ -647,10 +706,10 @@ class SceneGenerator {
         triangleDataTexture.unpackAlignment = 8;
 
         totalTexels = texelsPerMaterial * this.materials.length;
-        texelHeight = Math.max(1, ~~Math.pow(2, Math.log2(Math.max(totalTexels / texelWidth, 1))) + 1);
+        texelHeight = Math.max(1, Math.ceil(totalTexels / texelWidth));
         const mh = texelHeight;
         const materialArray = new Float32Array(texelWidth * texelHeight * 4);
-        stride = 20;
+        stride = gpuSceneLayout.material.stride;
 
         for (let i = 0; i < this.materials.length; ++i) {
             const material = this.materials[i];
@@ -714,10 +773,10 @@ class SceneGenerator {
         // BVH Datatexture
         const totalNodes = nodes.length;
         totalTexels = texelsPerBVHNode * totalNodes;
-        texelHeight = ~~Math.pow(2, Math.log2(totalTexels / texelWidth)) + 1;
+        texelHeight = Math.max(1, Math.ceil(totalTexels / texelWidth));
         const bh = texelHeight;
 
-        stride = 16;
+        stride = gpuSceneLayout.bvhNode.stride;
         const nodesArray = new Float32Array(texelWidth * texelHeight * 4);
 
         for (let i = 0; i < totalNodes; ++i) {

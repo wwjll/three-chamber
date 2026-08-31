@@ -1,5 +1,5 @@
 import { JointData } from '@dimforge/rapier3d-compat';
-import { Quaternion, Vector3 } from 'three';
+import { Euler, Quaternion, Vector3 } from 'three';
 import ChainSolver from './ChainSolver.js';
 
 const _tmpTargetPos = new Vector3();
@@ -16,81 +16,25 @@ const _tmpGraspWorldPos = new Vector3();
 const _tmpPickPos = new Vector3();
 const _tmpContainerPos = new Vector3();
 const _tmpVerticalGraspQuat = new Quaternion();
+const _tmpFromEuler = new Euler();
+const _tmpToEuler = new Euler();
+const _tmpCurrentEuler = new Euler();
 
-const sequenceJson = {
-    name: 'ik-pick-default',
-    version: 1,
-    steps: [
-        {
-            id: 'approach',
-            type: 'move',
-            target: { kind: 'cube', pose: 'topDownPick', hoverRef: 'openStage' },
-            durationParam: 'approachDurationMs',
-            solveWhileLerping: true,
-            completion: 'solve',
-        },
-        {
-            id: 'waitOpen',
-            type: 'wait',
-            durationParam: 'stageDelayMs',
-        },
-        {
-            id: 'openGrip',
-            type: 'grip',
-            mode: 'open',
-        },
-        {
-            id: 'waitDescend',
-            type: 'wait',
-            durationParam: 'stageDelayMs',
-        },
-        {
-            id: 'descend',
-            type: 'move',
-            target: { kind: 'cube', pose: 'topDownPick', hoverRef: 'descendStage' },
-            durationParam: 'descendDurationMs',
-            solveWhileLerping: true,
-            completion: 'solve',
-            toleranceProfile: 'descend',
-        },
-        {
-            id: 'grip',
-            type: 'grip',
-            mode: 'closeUntilContact',
-        },
-        {
-            id: 'lift',
-            type: 'move',
-            target: { kind: 'cube', pose: 'topDownPick', hoverRef: 'graspHover' },
-            durationParam: 'liftDurationMs',
-            solveWhileLerping: true,
-            completion: 'solve',
-        },
-        {
-            id: 'waitCarry',
-            type: 'wait',
-            durationParam: 'stageDelayMs',
-        },
-        {
-            id: 'carry',
-            type: 'move',
-            target: { kind: 'container', pose: 'dropTop', hoverRef: 'graspHover' },
-            durationParam: 'carryDurationMs',
-            solveWhileLerping: true,
-            completion: 'solve',
-        },
-        {
-            id: 'waitDrop',
-            type: 'wait',
-            durationParam: 'stageDelayMs',
-        },
-        {
-            id: 'release',
-            type: 'grip',
-            mode: 'open',
-        },
-    ],
-};
+function smoothstep(value) {
+    const t = Math.min(1, Math.max(0, value));
+    return t * t * (3 - 2 * t);
+}
+
+function unwrapRadians(value, reference) {
+    let result = value;
+    while (result - reference > Math.PI) {
+        result -= Math.PI * 2;
+    }
+    while (result - reference < -Math.PI) {
+        result += Math.PI * 2;
+    }
+    return result;
+}
 
 function copyBodyPose(body, outPos, outQuat) {
     const t = body.translation();
@@ -111,17 +55,16 @@ function createSequenceResolver({
     getContainerDropPoint,
 }) {
     const chainRef = chain ?? null;
-    const pickParamsGetter = typeof getPickParams === 'function' ? getPickParams : () => ({});
-    const containerDropPointGetter = typeof getContainerDropPoint === 'function'
-        ? getContainerDropPoint
-        : (out) => out.set(0, 0, 0);
+    const pickParamsGetter = getPickParams ?? (() => ({}));
+    const containerDropPointGetter = getContainerDropPoint
+        ?? ((out) => out.set(0, 0, 0));
 
     function computePickTargetFromCube(cubeItem, hover, outPos, outQuat) {
         if (!cubeItem?.mesh || !outPos || !outQuat) return false;
         cubeItem.mesh.getWorldPosition(_tmpPickPos);
         const pickParams = pickParamsGetter();
-        const cubeSize = Number.isFinite(cubeItem.size) ? cubeItem.size : pickParams.cubeSize;
-        const hoverOffset = Number.isFinite(hover) ? hover : pickParams.graspHover;
+        const cubeSize = cubeItem.size ?? pickParams.cubeSize;
+        const hoverOffset = hover ?? pickParams.graspHover;
         const half = Math.max(0.001, cubeSize) * 0.5;
         const actuator = chainRef?.getActuator?.() ?? null;
 
@@ -137,7 +80,7 @@ function createSequenceResolver({
     function setPickTargetToContainer(hover, outPos, outQuat) {
         if (!outPos || !outQuat) return false;
         const pickParams = pickParamsGetter();
-        const hoverOffset = Number.isFinite(hover) ? hover : pickParams.graspHover;
+        const hoverOffset = hover ?? pickParams.graspHover;
         containerDropPointGetter(_tmpContainerPos);
         outPos.set(_tmpContainerPos.x, hoverOffset, _tmpContainerPos.z);
 
@@ -153,24 +96,24 @@ function createSequenceResolver({
 
     function getOpenStageHover(cubeItem) {
         const pickParams = pickParamsGetter();
-        const cubeSize = Number.isFinite(cubeItem?.size) ? cubeItem.size : pickParams.cubeSize;
+        const cubeSize = cubeItem?.size ?? pickParams.cubeSize;
         return Math.max(0, cubeSize * 1.5);
     }
 
     function getDescendStageHover(cubeItem) {
         const pickParams = pickParamsGetter();
-        const cubeSize = Number.isFinite(cubeItem?.size) ? cubeItem.size : pickParams.cubeSize;
+        const cubeSize = cubeItem?.size ?? pickParams.cubeSize;
         return -Math.min(Math.max(cubeSize * 0.9 + 0.012, 0.018), 0.05);
     }
 
     const targetResolvers = {
         'cube.topDownPick': (context, targetSpec, outPos, outQuat) => {
             const cubeItem = context?.cubeItem ?? null;
-            const hover = Number.isFinite(context?.hover) ? context.hover : undefined;
+            const hover = context?.hover;
             return computePickTargetFromCube(cubeItem, hover, outPos, outQuat);
         },
         'container.dropTop': (context, targetSpec, outPos, outQuat) => {
-            const hover = Number.isFinite(context?.hover) ? context.hover : undefined;
+            const hover = context?.hover;
             return setPickTargetToContainer(hover, outPos, outQuat);
         },
     };
@@ -182,31 +125,24 @@ function createSequenceResolver({
     };
 
     function resolveTarget(targetSpec, context, outPos, outQuat) {
-        const kind = typeof targetSpec?.kind === 'string' ? targetSpec.kind : '';
-        const pose = typeof targetSpec?.pose === 'string' ? targetSpec.pose : '';
+        const kind = targetSpec?.kind ?? '';
+        const pose = targetSpec?.pose ?? '';
         const resolver = targetResolvers[`${kind}.${pose}`];
-        return typeof resolver === 'function'
-            ? resolver(context, targetSpec, outPos, outQuat) === true
-            : false;
+        return resolver?.(context, targetSpec, outPos, outQuat) === true;
     }
 
     function resolveHover(targetSpec, context) {
-        if (Number.isFinite(targetSpec?.hover)) return targetSpec.hover;
-        const hoverRef = typeof targetSpec?.hoverRef === 'string' ? targetSpec.hoverRef : '';
+        if (targetSpec?.hover !== undefined) return targetSpec.hover;
+        const hoverRef = targetSpec?.hoverRef ?? '';
         const resolver = hoverResolvers[hoverRef];
-        if (typeof resolver === 'function') {
+        if (resolver) {
             const resolved = resolver(context, targetSpec);
-            if (Number.isFinite(resolved)) return resolved;
+            if (resolved !== undefined) return resolved;
         }
         return pickParamsGetter().graspHover;
     }
 
-    function resolve(sequence) {
-        return sequence && Array.isArray(sequence.steps) ? sequence : sequenceJson;
-    }
-
     return {
-        resolve,
         resolveTarget,
         resolveHover,
         targetResolvers,
@@ -218,57 +154,54 @@ class SequencePlayer {
     constructor(options = {}) {
         this.chain = options.chain ?? null;
         this.sequence = null;
-        this.getTargetObject = typeof options.getTargetObject === 'function'
-            ? options.getTargetObject
-            : () => null;
-        this.getPhysicsWorld = typeof options.getPhysicsWorld === 'function'
-            ? options.getPhysicsWorld
-            : () => null;
-        this.getPhysicsCubes = typeof options.getPhysicsCubes === 'function'
-            ? options.getPhysicsCubes
-            : () => [];
-        this.requestRender = typeof options.requestRender === 'function'
-            ? options.requestRender
-            : () => {};
-        this.now = typeof options.now === 'function'
-            ? options.now
-            : () => performance.now();
-        this.getPickParams = typeof options.getPickParams === 'function'
-            ? options.getPickParams
-            : () => ({});
-        this.forwardKinematics = typeof options.forwardKinematics === 'function'
-            ? options.forwardKinematics
-            : null;
-        this.applyQToChain = typeof options.applyQToChain === 'function'
-            ? options.applyQToChain
-            : () => {};
-        this.getInitialQ = typeof options.getInitialQ === 'function'
-            ? options.getInitialQ
-            : () => [];
-        this.isCubeValid = typeof options.isCubeValid === 'function'
-            ? options.isCubeValid
-            : (cubeItem) => Boolean(cubeItem?.mesh?.parent);
-        this.defaultInteractionGroups = Number.isFinite(options.defaultInteractionGroups)
-            ? options.defaultInteractionGroups
-            : 0xffffffff;
-        this.heldCubeInteractionGroups = Number.isFinite(options.heldCubeInteractionGroups)
-            ? options.heldCubeInteractionGroups
-            : this.defaultInteractionGroups;
-        this.jawGapOpenEps = Number.isFinite(options.jawGapOpenEps)
-            ? options.jawGapOpenEps
-            : 1e-4;
+        this.getTargetObject = options.getTargetObject ?? (() => null);
+        this.getPhysicsWorld = options.getPhysicsWorld ?? (() => null);
+        this.getPhysicsCubes = options.getPhysicsCubes ?? (() => []);
+        this.requestRender = options.requestRender ?? (() => {});
+        this.now = options.now ?? (() => performance.now());
+        this.getPickParams = options.getPickParams ?? (() => ({}));
+        this.forwardKinematics = options.forwardKinematics ?? null;
+        this.applyQToChain = options.applyQToChain ?? (() => {});
+        this.getInitialQ = options.getInitialQ ?? (() => []);
+        this.isCubeValid = options.isCubeValid
+            ?? ((cubeItem) => Boolean(cubeItem?.mesh?.parent));
+        this.defaultInteractionGroups = options.defaultInteractionGroups
+            ?? 0xffffffff;
+        this.heldCubeInteractionGroups = options.heldCubeInteractionGroups
+            ?? this.defaultInteractionGroups;
+        this.jawGapOpenEps = options.jawGapOpenEps ?? 1e-4;
+        this.jawContactGapRatio = Math.max(
+            0,
+            options.jawContactGapRatio ?? 0.92,
+        );
+        this.moveSettleTimeoutMs = Math.max(
+            0,
+            options.moveSettleTimeoutMs ?? Infinity,
+        );
+        this.resolveSequenceTarget = options.resolveTarget ?? null;
+        this.resolveSequenceJointState = options.resolveJointState ?? null;
+        this.getJawInnerGap = options.getJawInnerGap ?? null;
+        this.onActuatorChange = options.onActuatorChange ?? (() => {});
+        this.onStepEnter = options.onStepEnter ?? (() => {});
+        this.onPoseReached = options.onPoseReached ?? (() => {});
+        this.onComplete = options.onComplete ?? (() => {});
 
         this._solver = new ChainSolver({
             targetPosition: new Vector3(),
             targetQuaternion: new Quaternion(),
             chain: this.chain,
-            maxIter: Number.isFinite(options.maxIter) ? options.maxIter : 20,
-            alpha: Number.isFinite(options.alpha) ? options.alpha : 0.05,
-            tolerance: Number.isFinite(options.tolerance) ? options.tolerance : 1e-3,
+            maxIter: options.maxIter ?? 20,
+            alpha: options.alpha ?? 0.05,
+            tolerance: options.tolerance ?? 1e-3,
             solveMode: options.solveMode === 'Position + Rotation'
                 ? 'Position + Rotation'
                 : 'Position Only',
-            debug: options.debug === true,
+            solverMethod: options.solverMethod,
+            damping: options.damping,
+            dlsMaxDelta: options.dlsMaxDelta,
+            rotationWeight: options.rotationWeight,
+            rotationTolerance: options.rotationTolerance,
+            debug: options.debug ?? false,
             forwardKinematics: (q) => {
                 const applyForwardKinematics = this.forwardKinematics ?? this.applyQToChain;
                 applyForwardKinematics(q, { syncToolEuler: false, syncReachRange: false });
@@ -279,6 +212,8 @@ class SequencePlayer {
         this._isSolving = false;
         this._pendingSolve = false;
         this._solveActive = false;
+        this._solveRevision = 0;
+        this._lastSolveMetrics = null;
         this._pendingTarget = new Vector3();
         this._pendingTargetQuat = new Quaternion();
 
@@ -295,11 +230,12 @@ class SequencePlayer {
             getContainerDropPoint: options.getContainerDropPoint,
         });
 
-        this.loadSequence(this._sequenceResolver.resolve(options.sequence));
+        this.loadSequence(options.sequence);
+        this.syncSolverJoints();
     }
 
-    loadSequence(sequence) {
-        this.sequence = this._sequenceResolver?.resolve(sequence) ?? sequenceJson;
+    loadSequence(sequence = { steps: [] }) {
+        this.sequence = sequence;
     }
 
     clear() {
@@ -321,12 +257,29 @@ class SequencePlayer {
         return this._stageLerp !== null;
     }
 
+    isActive() {
+        return this._pickSequence !== null;
+    }
+
     isSolving() {
         return this._isSolving;
     }
 
     hasPendingSolve() {
         return this._pendingSolve || this._solveActive;
+    }
+
+    getSolveRevision() {
+        return this._solveRevision;
+    }
+
+    getSolveMetrics() {
+        return this._lastSolveMetrics
+            ? {
+                ...this._lastSolveMetrics,
+                pending: this.hasPendingSolve(),
+            }
+            : null;
     }
 
     _getActuator() {
@@ -337,12 +290,16 @@ class SequencePlayer {
         return this._graspJoint !== null;
     }
 
+    getGraspedCube() {
+        return this._graspedCube;
+    }
+
     getJointState() {
         return this._qCurrent.slice();
     }
 
     setJointState(q, options = {}) {
-        this._qCurrent = Array.isArray(q) ? q.slice() : [];
+        this._qCurrent = q.slice();
         this.applyQToChain(this._qCurrent, options);
         this.syncSolverJoints();
     }
@@ -353,10 +310,30 @@ class SequencePlayer {
     }
 
     setSolverConfig(config = {}) {
-        if (Number.isFinite(config.maxIter)) this._solver.maxIter = config.maxIter;
-        if (Number.isFinite(config.alpha)) this._solver.alpha = config.alpha;
-        if (Number.isFinite(config.tolerance)) this._solver.tolerance = config.tolerance;
-        if (typeof config.debug === 'boolean') this._solver.debug = config.debug;
+        if (config.maxIter !== undefined) this._solver.maxIter = config.maxIter;
+        if (config.alpha !== undefined) this._solver.alpha = config.alpha;
+        if (config.tolerance !== undefined) {
+            this._solver.tolerance = config.tolerance;
+        }
+        if (config.solverMethod === 'Jacobian' || config.solverMethod === 'DLS') {
+            this._solver.solverMethod = config.solverMethod;
+        }
+        if (config.damping !== undefined) {
+            this._solver.damping = Math.max(1e-5, config.damping);
+        }
+        if (config.dlsMaxDelta !== undefined) {
+            this._solver.dlsMaxDelta = Math.max(1e-4, config.dlsMaxDelta);
+        }
+        if (config.rotationWeight !== undefined) {
+            this._solver.rotationWeight = Math.max(0, config.rotationWeight);
+        }
+        if (config.rotationTolerance !== undefined) {
+            this._solver.rotationTolerance = Math.max(
+                1e-6,
+                config.rotationTolerance,
+            );
+        }
+        if (config.debug !== undefined) this._solver.debug = config.debug;
         if (config.solveMode === 'Position Only' || config.solveMode === 'Position + Rotation') {
             this._solver.solveMode = config.solveMode;
         }
@@ -385,12 +362,17 @@ class SequencePlayer {
         try {
             this._qCurrent = this._solver.solve(this._qCurrent);
             this.applyQToChain(this._qCurrent, { syncToolEuler: false, syncReachRange: false });
+            this._solveRevision += 1;
         } finally {
             this._isSolving = false;
         }
 
-        const remainingError = this._solver.computeSolveErrorNorm(this._qCurrent);
-        const remainingPosError = this._solver.computePositionError(this._qCurrent).length();
+        const taskError = this._solver.computeTaskError(this._qCurrent);
+        const remainingPosError = taskError.posErr.length();
+        const remainingRotationError = taskError.rotErr.length();
+        const remainingError = this._solver.isPositionAndRotationMode()
+            ? Math.hypot(remainingPosError, remainingRotationError)
+            : remainingPosError;
         const { converged } = this.evaluateSolveResult({
             remainingError,
             remainingPosError,
@@ -399,6 +381,15 @@ class SequencePlayer {
             descendStageTolerance,
             descendTimeoutMs,
         });
+        this._lastSolveMetrics = {
+            solverMethod: this._solver.solverMethod,
+            positionError: remainingPosError,
+            rotationError: remainingRotationError,
+            taskError: remainingError,
+            iterations: this._solver.lastIterationCount,
+            converged,
+            revision: this._solveRevision,
+        };
 
         if (!converged) {
             this._solveActive = true;
@@ -431,11 +422,12 @@ class SequencePlayer {
             return true;
         }
         if (!candidate) {
-            const gripCloseStep = Number.isFinite(this.getPickParams().gripCloseStep)
-                ? this.getPickParams().gripCloseStep
-                : 0.002;
+            const gripCloseStep = this.getPickParams().gripCloseStep ?? 0.002;
             const step = Math.max(0.002, gripCloseStep);
-            actuator.setOpenRatio(Math.max(0, actuator.getOpenRatio() - step));
+            this._setActuatorOpenRatio(
+                actuator,
+                Math.max(0, actuator.getOpenRatio() - step),
+            );
             return true;
         }
         return false;
@@ -450,11 +442,10 @@ class SequencePlayer {
     afterPhysicsStep() {
         const actuator = this._getActuator();
         if (this._graspJoint && actuator && this._graspedCube) {
-            const jawGap = actuator.getJawInnerGap();
-            const cubeSize = Number.isFinite(this._graspedCube.size)
-                ? this._graspedCube.size
-                : this.getPickParams().cubeSize;
-            const isOpening = Number.isFinite(this._prevJawInnerGap)
+            const jawGap = this._getJawInnerGap(actuator);
+            const cubeSize = this._graspedCube.size
+                ?? this.getPickParams().cubeSize;
+            const isOpening = this._prevJawInnerGap !== null
                 && jawGap > (this._prevJawInnerGap + this.jawGapOpenEps);
             if (jawGap >= cubeSize && isOpening) {
                 this.releaseGraspJoint();
@@ -467,14 +458,30 @@ class SequencePlayer {
         this._prevJawInnerGap = actuator ? actuator.getJawInnerGap() : null;
     }
 
-    startPickSequence(cubeItem) {
+    startPickSequence(cubeItem, context = {}) {
         const targetObject = this.getTargetObject();
         if (!cubeItem || !targetObject || !this.sequence?.steps?.length) return false;
 
         this.clear();
         this._pickSequence = {
             cube: cubeItem,
+            context,
             stepIndex: 0,
+            requiresCube: true,
+        };
+        return this._enterCurrentStep();
+    }
+
+    startSequence(context = {}) {
+        const targetObject = this.getTargetObject();
+        if (!targetObject || !this.sequence?.steps?.length) return false;
+
+        this.clear();
+        this._pickSequence = {
+            cube: null,
+            context,
+            stepIndex: 0,
+            requiresCube: false,
         };
         return this._enterCurrentStep();
     }
@@ -485,8 +492,51 @@ class SequencePlayer {
         if (!stageLerp || !targetObject) return false;
 
         const t = Math.min(1, (this.now() - stageLerp.startMs) / stageLerp.durationMs);
-        targetObject.position.lerpVectors(stageLerp.fromPos, stageLerp.toPos, t);
-        targetObject.quaternion.copy(stageLerp.fromQuat).slerp(stageLerp.toQuat, t);
+        if (stageLerp.kind === 'joint') {
+            const eased = smoothstep(t);
+            this._qCurrent = stageLerp.fromJointState.map((fromValue, index) => (
+                fromValue
+                + (stageLerp.toJointState[index] - fromValue) * eased
+            ));
+            this.applyQToChain(this._qCurrent, {
+                syncToolEuler: false,
+                syncReachRange: false,
+            });
+            this._syncTargetControlFromGrip();
+            if (t >= 1) {
+                const step = this._currentStep();
+                this._stageLerp = null;
+                this._notifyPoseReached(step);
+                this._advanceStep();
+            }
+            this.requestRender();
+            return true;
+        }
+
+        const progress = stageLerp.interpolation === 'smooth'
+            ? smoothstep(t)
+            : t;
+        targetObject.position.lerpVectors(
+            stageLerp.fromPos,
+            stageLerp.toPos,
+            progress,
+        );
+        if (stageLerp.rotationInterpolation === 'eulerXYZ') {
+            _tmpCurrentEuler.set(
+                stageLerp.fromEuler.x
+                    + (stageLerp.toEuler.x - stageLerp.fromEuler.x) * progress,
+                stageLerp.fromEuler.y
+                    + (stageLerp.toEuler.y - stageLerp.fromEuler.y) * progress,
+                stageLerp.fromEuler.z
+                    + (stageLerp.toEuler.z - stageLerp.fromEuler.z) * progress,
+                'XYZ',
+            );
+            targetObject.quaternion.setFromEuler(_tmpCurrentEuler);
+        } else {
+            targetObject.quaternion
+                .copy(stageLerp.fromQuat)
+                .slerp(stageLerp.toQuat, progress);
+        }
         targetObject.updateMatrixWorld(true);
         if (stageLerp.solveWhileLerping) {
             this.queueSolveFromTarget();
@@ -505,6 +555,7 @@ class SequencePlayer {
                     };
                     this.queueSolveFromTarget();
                 } else {
+                    this._notifyPoseReached(step);
                     this._advanceStep();
                 }
             } else {
@@ -523,23 +574,33 @@ class SequencePlayer {
         descendTimeoutMs,
     }) {
         const step = this._currentStep();
-        const awaitingMoveConvergence = step?.type === 'move' && this._stepRuntime?.awaitingConvergence === true;
+        const awaitingMoveConvergence = step?.type === 'move'
+            && this._stepRuntime?.awaitingConvergence;
         const useDescendProfile = awaitingMoveConvergence && step?.toleranceProfile === 'descend';
         const descendContactReady = useDescendProfile
             && this._pickSequence?.cube
             && this._pickJawContactCandidate([this._pickSequence.cube]) !== null;
         const descendTimedOut = useDescendProfile
-            && Number.isFinite(this._stepRuntime?.startedMs)
+            && this._stepRuntime?.startedMs !== undefined
             && (this.now() - this._stepRuntime.startedMs) >= descendTimeoutMs;
+        const moveTimedOut = awaitingMoveConvergence
+            && this._stepRuntime?.startedMs !== undefined
+            && (this.now() - this._stepRuntime.startedMs) >= this.moveSettleTimeoutMs;
         const stagePosTolerance = useDescendProfile
             ? Math.min(targetTolerance, descendStageTolerance)
             : Math.max(targetTolerance, pickStagePositionTolerance);
         const converged = awaitingMoveConvergence
-            ? (remainingPosError <= stagePosTolerance || descendContactReady || descendTimedOut)
+            ? (
+                remainingPosError <= stagePosTolerance
+                || descendContactReady
+                || descendTimedOut
+                || moveTimedOut
+            )
             : remainingError <= targetTolerance;
 
         if (converged && awaitingMoveConvergence) {
             this._stepRuntime = null;
+            this._notifyPoseReached(step);
             this._advanceStep();
         }
 
@@ -552,6 +613,13 @@ class SequencePlayer {
         return this.sequence?.steps?.[stepIndex] ?? null;
     }
 
+    _notifyPoseReached(step) {
+        if (step?.type !== 'move' && step?.type !== 'joint') {
+            return;
+        }
+        this.onPoseReached(step, this._pickSequence?.cube ?? null);
+    }
+
     _advanceStep() {
         if (!this._pickSequence) return false;
         this._pickSequence.stepIndex += 1;
@@ -561,16 +629,30 @@ class SequencePlayer {
     _enterCurrentStep() {
         const step = this._currentStep();
         if (!step) {
+            const completedCube = this._pickSequence?.cube ?? null;
+            const completedContext = this._pickSequence?.context ?? {};
             this.clear();
+            this.onComplete(completedCube, completedContext);
             this.requestRender();
             return false;
         }
 
-        if (!this.isCubeValid(this._pickSequence?.cube)) {
+        if (
+            this._pickSequence?.requiresCube
+            && !this.isCubeValid(this._pickSequence?.cube)
+        ) {
             this.releaseGraspJoint();
             this.clear();
             return false;
         }
+        if (
+            step.when
+            && this._pickSequence?.context?.[step.when] !== true
+        ) {
+            return this._advanceStep();
+        }
+
+        this.onStepEnter(step, this._pickSequence?.cube ?? null);
 
         if (step.type === 'wait') {
             this._stepRuntime = { kind: 'wait' };
@@ -591,6 +673,10 @@ class SequencePlayer {
             return this._enterMoveStep(step);
         }
 
+        if (step.type === 'joint') {
+            return this._enterJointStep(step);
+        }
+
         this.clear();
         return false;
     }
@@ -607,7 +693,9 @@ class SequencePlayer {
         };
         this._startCurrentLerp({
             durationMs: this._resolveDurationMs(step),
-            solveWhileLerping: step.solveWhileLerping === true,
+            interpolation: step.interpolation,
+            rotationInterpolation: step.rotationInterpolation,
+            solveWhileLerping: step.solveWhileLerping ?? false,
             toPos: _tmpTargetPos,
             toQuat: _tmpTargetQuat,
         });
@@ -616,16 +704,30 @@ class SequencePlayer {
     }
 
     _enterGripStep(step) {
-        if (step.mode === 'open') {
-            this.chain?.openActuator?.();
+        const actuator = this._getActuator();
+        if (!actuator) {
+            this.clear();
+            return false;
+        }
+        const timed = step.durationMs !== undefined
+            || step.durationParam !== undefined;
+
+        if (step.mode === 'open' && !timed) {
+            this._setActuatorOpenRatio(actuator, 1);
+            this.releaseGraspJoint();
             this.requestRender();
             return this._advanceStep();
         }
 
-        if (step.mode === 'closeUntilContact') {
+        if (step.mode === 'open' || step.mode === 'closeUntilContact') {
             this._stepRuntime = {
                 kind: 'grip',
-                mode: 'closeUntilContact',
+                mode: step.mode,
+                startedMs: this.now(),
+                durationMs: this._resolveDurationMs(step),
+                fromOpenRatio: actuator.getOpenRatio(),
+                toOpenRatio: step.mode === 'open' ? 1 : 0,
+                timed,
             };
             this.requestRender();
             return true;
@@ -635,43 +737,137 @@ class SequencePlayer {
         return false;
     }
 
-    _startCurrentLerp({ durationMs, solveWhileLerping, toPos, toQuat }) {
+    _enterJointStep(step) {
+        if (!this.resolveSequenceJointState) {
+            this.clear();
+            return false;
+        }
+        const fromJointState = this.getJointState();
+        const toJointState = [];
+        const resolved = this.resolveSequenceJointState(
+            step.target ?? step.pose,
+            {
+                cubeItem: this._pickSequence?.cube ?? null,
+                sequenceContext: this._pickSequence?.context ?? {},
+                currentJointState: fromJointState.slice(),
+                step,
+                player: this,
+            },
+            toJointState,
+        );
+        if (
+            resolved !== true
+            || toJointState.length !== fromJointState.length
+            || toJointState.some((value) => !Number.isFinite(value))
+        ) {
+            this.clear();
+            return false;
+        }
+        this._stageLerp = {
+            kind: 'joint',
+            startMs: this.now(),
+            durationMs: this._resolveDurationMs(step),
+            fromJointState,
+            toJointState: toJointState.slice(),
+        };
+        this.requestRender();
+        return true;
+    }
+
+    _startCurrentLerp({
+        durationMs,
+        interpolation = 'linear',
+        rotationInterpolation = 'quaternion',
+        solveWhileLerping,
+        toPos,
+        toQuat,
+    }) {
         const targetObject = this.getTargetObject();
         if (!targetObject) return;
+        _tmpFromEuler.setFromQuaternion(targetObject.quaternion, 'XYZ');
+        _tmpToEuler.setFromQuaternion(toQuat, 'XYZ');
+        _tmpToEuler.set(
+            unwrapRadians(_tmpToEuler.x, _tmpFromEuler.x),
+            unwrapRadians(_tmpToEuler.y, _tmpFromEuler.y),
+            unwrapRadians(_tmpToEuler.z, _tmpFromEuler.z),
+            'XYZ',
+        );
         this._stageLerp = {
             startMs: this.now(),
-            durationMs: Math.max(1, Number.isFinite(durationMs) ? durationMs : 1),
+            durationMs: Math.max(1, durationMs ?? 1),
+            interpolation,
+            rotationInterpolation,
             solveWhileLerping,
             fromPos: targetObject.position.clone(),
             fromQuat: targetObject.quaternion.clone(),
+            fromEuler: _tmpFromEuler.clone(),
             toPos: toPos.clone(),
             toQuat: toQuat.clone(),
+            toEuler: _tmpToEuler.clone(),
         };
     }
 
     _resolveDurationMs(step) {
-        if (Number.isFinite(step.durationMs)) return step.durationMs;
-        const key = typeof step.durationParam === 'string' ? step.durationParam : '';
+        const scale = step.durationScale ?? 1;
+        if (step.durationMs !== undefined) {
+            return Math.max(1, step.durationMs * scale);
+        }
+        const key = step.durationParam ?? '';
         const value = key ? this.getPickParams()?.[key] : null;
-        return Number.isFinite(value) ? value : 1;
+        return Math.max(1, (value ?? 1) * scale);
     }
 
     _resolveTarget(targetSpec, outPos, outQuat) {
         if (!targetSpec) return false;
         const cubeItem = this._pickSequence?.cube ?? null;
         const hover = this._resolveHover(targetSpec, cubeItem);
-        return this._sequenceResolver?.resolveTarget?.(targetSpec, { cubeItem, hover }, outPos, outQuat) === true;
+        const context = {
+            cubeItem,
+            hover,
+            sequenceContext: this._pickSequence?.context ?? {},
+            player: this,
+        };
+        if (
+            this.resolveSequenceTarget
+            && this.resolveSequenceTarget(targetSpec, context, outPos, outQuat) === true
+        ) {
+            return true;
+        }
+        return this._sequenceResolver?.resolveTarget?.(
+            targetSpec,
+            context,
+            outPos,
+            outQuat,
+        ) === true;
     }
 
     _resolveHover(targetSpec, cubeItem) {
-        if (Number.isFinite(targetSpec?.hover)) return targetSpec.hover;
+        if (targetSpec?.hover !== undefined) return targetSpec.hover;
         const resolved = this._sequenceResolver?.resolveHover?.(targetSpec, { cubeItem });
-        return Number.isFinite(resolved) ? resolved : this.getPickParams().graspHover;
+        return resolved ?? this.getPickParams().graspHover;
     }
 
     _updateGripStep(actuator = this._getActuator()) {
         const step = this._currentStep();
-        if (!step || step.type !== 'grip' || step.mode !== 'closeUntilContact' || !actuator) return;
+        if (!step || step.type !== 'grip' || !actuator) return;
+
+        if (step.mode === 'open') {
+            const runtime = this._stepRuntime;
+            const elapsed = this.now() - runtime.startedMs;
+            const progress = smoothstep(elapsed / runtime.durationMs);
+            this._setActuatorOpenRatio(
+                actuator,
+                runtime.fromOpenRatio
+                    + (runtime.toOpenRatio - runtime.fromOpenRatio) * progress,
+            );
+            if (progress >= 1) {
+                this.releaseGraspJoint();
+                this._advanceStep();
+            }
+            return;
+        }
+
+        if (step.mode !== 'closeUntilContact') return;
 
         const cubeItem = this._pickSequence?.cube;
         if (!this.isCubeValid(cubeItem) || !cubeItem?.body || !cubeItem?.collider) {
@@ -692,6 +888,7 @@ class SequencePlayer {
             return;
         }
 
+        const runtime = this._stepRuntime;
         const openRatio = actuator.getOpenRatio();
         if (openRatio <= 0) {
             this.clear();
@@ -699,13 +896,29 @@ class SequencePlayer {
             return;
         }
 
-        const gripCloseStep = Number.isFinite(this.getPickParams().gripCloseStep)
-            ? this.getPickParams().gripCloseStep
-            : 0.002;
-        const gripStep = Math.max(0.002, gripCloseStep);
-        actuator.setOpenRatio(Math.max(0, openRatio - gripStep));
+        let nextOpenRatio;
+        if (runtime?.timed) {
+            const elapsed = this.now() - runtime.startedMs;
+            const progress = smoothstep(elapsed / runtime.durationMs);
+            nextOpenRatio = runtime.fromOpenRatio
+                + (runtime.toOpenRatio - runtime.fromOpenRatio) * progress;
+        } else {
+            const gripCloseStep = this.getPickParams().gripCloseStep ?? 0.002;
+            nextOpenRatio = openRatio - Math.max(0.002, gripCloseStep);
+        }
+        this._setActuatorOpenRatio(actuator, Math.max(0, nextOpenRatio));
         this.queueSolveFromTarget();
         this.requestRender();
+    }
+
+    _setActuatorOpenRatio(actuator, openRatio) {
+        actuator?.setOpenRatio?.(openRatio);
+        this.onActuatorChange(actuator, openRatio);
+    }
+
+    _getJawInnerGap(actuator = this._getActuator()) {
+        const resolved = this.getJawInnerGap?.(actuator);
+        return Math.max(0, resolved ?? actuator?.getJawInnerGap?.() ?? 0);
     }
 
     _applyHeldCubeCollisionFilter(cubeItem) {
@@ -719,12 +932,10 @@ class SequencePlayer {
 
     _restoreHeldCubeCollisionFilter(cubeItem) {
         if (!cubeItem?.collider || !cubeItem.gripFilterApplied) return;
-        const collisionGroups = Number.isFinite(cubeItem.savedCollisionGroups)
-            ? cubeItem.savedCollisionGroups
-            : this.defaultInteractionGroups;
-        const solverGroups = Number.isFinite(cubeItem.savedSolverGroups)
-            ? cubeItem.savedSolverGroups
-            : this.defaultInteractionGroups;
+        const collisionGroups = cubeItem.savedCollisionGroups
+            ?? this.defaultInteractionGroups;
+        const solverGroups = cubeItem.savedSolverGroups
+            ?? this.defaultInteractionGroups;
         cubeItem.collider.setCollisionGroups(collisionGroups);
         cubeItem.collider.setSolverGroups(solverGroups);
         cubeItem.savedCollisionGroups = null;
@@ -757,16 +968,14 @@ class SequencePlayer {
     }
 
     _pickJawContactCandidate(cubeList, actuator = this._getActuator()) {
-        if (!actuator || !Array.isArray(cubeList) || cubeList.length === 0) return null;
-        const jawGap = actuator.getJawInnerGap();
+        if (!actuator || cubeList.length === 0) return null;
+        const jawGap = this._getJawInnerGap(actuator);
         for (const cubeItem of cubeList) {
             if (!cubeItem?.collider || !cubeItem?.body || !this.isCubeValid(cubeItem)) continue;
             const contact = this._getJawContactState(cubeItem, actuator);
             if (!(contact.left && contact.right)) continue;
-            const cubeSize = Number.isFinite(cubeItem.size)
-                ? cubeItem.size
-                : this.getPickParams().cubeSize;
-            if (jawGap <= 0.92 * cubeSize) {
+            const cubeSize = cubeItem.size ?? this.getPickParams().cubeSize;
+            if (jawGap <= this.jawContactGapRatio * cubeSize) {
                 return cubeItem;
             }
         }
@@ -821,10 +1030,25 @@ class SequencePlayer {
         this._pendingTarget.copy(_tmpWorldPosA);
         this._pendingTargetQuat.copy(_tmpWorldQuatA);
     }
+
+    _syncTargetControlFromGrip() {
+        const targetObject = this.getTargetObject();
+        const actuator = this._getActuator();
+        if (!targetObject || !actuator) return;
+        actuator.getGripWorldPosition(_tmpWorldPosA);
+        actuator.getGripWorldQuaternion(_tmpWorldQuatA);
+        if (targetObject.parent) {
+            targetObject.parent.worldToLocal(_tmpWorldPosA);
+            targetObject.parent.getWorldQuaternion(_tmpInvWorldQuat).invert();
+            _tmpWorldQuatA.premultiply(_tmpInvWorldQuat);
+        }
+        targetObject.position.copy(_tmpWorldPosA);
+        targetObject.quaternion.copy(_tmpWorldQuatA);
+        targetObject.updateMatrixWorld(true);
+    }
 }
 
 export {
-    sequenceJson,
     createSequenceResolver,
     SequencePlayer,
     SequencePlayer as default,

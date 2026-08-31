@@ -1,7 +1,7 @@
 <html>
 
 <head>
-    <title>Gradient Descent IK</title>
+    <title>Inverse Kinematics</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1" />
     <style>
@@ -13,26 +13,26 @@
             font-family: monospace;
         }
 
-        #info {
-            color: white;
-            position: absolute;
-            left: 10px;
-            bottom: 10px;
-            opacity: 0.5;
+        #control-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 10;
+            width: min(256px, 100vw);
+            max-height: 100vh;
+            overflow: auto;
         }
 
-        #output {
-            white-space: pre;
-            margin-bottom: 10px;
+        #control-panel>.tp-dfwv {
+            position: static;
+            width: 100%;
         }
     </style>
     <link rel="shortcut icon" href="#">
 </head>
 
 <body>
-    <div id="info">
-        <div id="output"></div>
-    </div>
+    <div id="control-panel"></div>
     <script type="module" src="./ik.js"></script>
 </body>
 

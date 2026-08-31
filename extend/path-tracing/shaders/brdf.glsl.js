@@ -38,7 +38,7 @@ const Brdf =  /* glsl */`
         return dot(color, vec3(0.2126, 0.7152, 0.0722));
     }
 
-    vec3 BRDF_F0(in Material material) {
+    vec3 BSDF_F0(in Material material) {
         vec3 baseColor = material.baseColor;
         float baseLuminance = 0.3 * baseColor.r + 0.6 * baseColor.g + 0.1 * baseColor.b;
         vec3 tint = (baseLuminance > 0.0) ? (baseColor / baseLuminance) : vec3(1.0);
@@ -69,34 +69,34 @@ const Brdf =  /* glsl */`
         return distribution * NdotH / max(4.0 * LdotH, EPSILON);
     }
 
-    float BRDFSpecularSampleWeight(in Material material) {
-        vec3 f0 = BRDF_F0(material);
+    float BSDFSpecularSampleWeight(in Material material) {
+        vec3 f0 = BSDF_F0(material);
         float diffuseWeight = (1.0 - material.metallic) * max(luminance(material.baseColor), 0.001);
         float specularWeight = max(luminance(f0), 0.001);
         return clamp(specularWeight / (diffuseWeight + specularWeight), 0.05, 0.95);
     }
 
-    float BRDFPDF(vec3 V, vec3 N, vec3 L, in Material material) {
-        float specularWeight = BRDFSpecularSampleWeight(material);
+    float BSDFPDF(vec3 V, vec3 N, vec3 L, in Material material) {
+        float specularWeight = BSDFSpecularSampleWeight(material);
         float diffusePdf = DiffusePDF(N, L);
         float specularPdf = SpecularPDF(V, N, L, material);
         return (1.0 - specularWeight) * diffusePdf + specularWeight * specularPdf;
     }
 
-    float MISPowerWeight(float pdfA, float pdfB) {
-        float pdfASquared = pdfA * pdfA;
-        float pdfBSquared = pdfB * pdfB;
-        return pdfASquared / max(pdfASquared + pdfBSquared, EPSILON);
-    }
-
-    vec3 BRDF_Evaluate(vec3 V, vec3 N, vec3 L, vec3 X, vec3 Y, in Material material) {
+    vec3 BSDFEvaluate(vec3 V, vec3 N, vec3 L, vec3 X, vec3 Y, in Material material) {
 
         float NdotL = dot(N, L);
         float NdotV = dot(N, V);
-        if(NdotL < 0.0 || NdotV < 0.0)
-        return vec3(0.0);
+        if(NdotL <= 0.0 || NdotV <= 0.0) {
+            return vec3(0.0);
+        }
     
-        vec3 H = normalize(L + V);
+        vec3 halfVector = L + V;
+        float halfVectorLengthSquared = dot(halfVector, halfVector);
+        if(halfVectorLengthSquared <= EPSILON) {
+            return vec3(0.0);
+        }
+        vec3 H = halfVector * inversesqrt(halfVectorLengthSquared);
         float NdotH = dot(N, H);
         float LdotH = dot(L, H);
     
@@ -117,10 +117,10 @@ const Brdf =  /* glsl */`
         // subsurface scattering
         float Fss90 = LdotH * LdotH * material.roughness;
         float Fss = mix(1.0, Fss90, FL) * mix(1.0, Fss90, FV);
-        float ss = 1.25 * (Fss * (1.0 / (NdotL + NdotV) - 0.5) + 0.5);
+        float ss = 1.25 * (Fss * (1.0 / max(NdotL + NdotV, EPSILON) - 0.5) + 0.5);
     
         // specular -- uniso
-        float alpha = material.roughness * material.roughness;
+        float alpha = max(material.roughness * material.roughness, 0.001);
         float Ds = GTR2(NdotH, alpha);
         float FH = SchlickFresnel(LdotH);
         vec3 Fs = mix(Cspec0, vec3(1), FH);

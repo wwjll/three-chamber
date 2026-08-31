@@ -4,6 +4,7 @@ import {
     Matrix4,
     Mesh,
     MeshBasicMaterial,
+    MeshStandardMaterial,
     CatmullRomCurve3,
     TubeGeometry,
     Vector3,
@@ -38,13 +39,13 @@ function normalizeDhParam(item) {
     }
     if (item && typeof item === 'object') {
         return {
-            theta: Number.isFinite(item.theta) ? item.theta : 0,
-            d: Number.isFinite(item.d) ? item.d : 0,
-            a: Number.isFinite(item.a) ? item.a : 0,
-            alpha: Number.isFinite(item.alpha) ? item.alpha : 0,
-            thetaOffset: Number.isFinite(item.thetaOffset) ? item.thetaOffset : 0,
-            minAngle: Number.isFinite(item.minAngle) ? item.minAngle : -185,
-            maxAngle: Number.isFinite(item.maxAngle) ? item.maxAngle : 185,
+            theta: item.theta ?? 0,
+            d: item.d ?? 0,
+            a: item.a ?? 0,
+            alpha: item.alpha ?? 0,
+            thetaOffset: item.thetaOffset ?? 0,
+            minAngle: item.minAngle ?? -185,
+            maxAngle: item.maxAngle ?? 185,
             axisSign: item.axisSign === -1 ? -1 : 1,
         };
     }
@@ -58,16 +59,16 @@ function alignBaseMatrix(container, offset = {}) {
         0, -1, 0, 0,
         0, 0, 0, 1,
     );
-    const tx = Number.isFinite(offset.x) ? offset.x : 0;
-    const ty = Number.isFinite(offset.y) ? offset.y : 0;
-    const tz = Number.isFinite(offset.z) ? offset.z : 0;
+    const tx = offset.x ?? 0;
+    const ty = offset.y ?? 0;
+    const tz = offset.z ?? 0;
     const translation = new Matrix4().makeTranslation(tx, ty, tz);
     container.matrixAutoUpdate = false;
     container.matrix.copy(align).multiply(translation);
 }
 
 function convertMDH(params) {
-    const dhParams = Array.isArray(params) ? params : [];
+    const dhParams = params;
     const result = [];
     const n = dhParams.length;
 
@@ -88,7 +89,7 @@ function convertMDH(params) {
 }
 
 function convertDH(params) {
-    const mdhParams = Array.isArray(params) ? params : [];
+    const mdhParams = params;
     const m = mdhParams.length;
     const result = [];
     const n = Math.max(0, m - 1);
@@ -166,26 +167,129 @@ function createChainFromDHParameters(dhParameters, mode = 'DH') {
     return chain;
 }
 
-function createTubeFromLocalPoints(points, radius, color) {
-    if (!Array.isArray(points) || points.length < 2) return null;
+function createVisualMaterial(color, styleParams) {
+    if (styleParams.litMaterials) {
+        return new MeshStandardMaterial({
+            color,
+            roughness: styleParams.roughness ?? 0.45,
+            metalness: styleParams.metalness ?? 0.2,
+        });
+    }
+    return new MeshBasicMaterial({ color });
+}
+
+function getDistinctLocalPoints(points) {
+    const result = [];
+    for (const point of points) {
+        if (!point) continue;
+        if (result.length === 0 || result[result.length - 1].distanceToSquared(point) > 1e-12) {
+            result.push(point.clone());
+        }
+    }
+    return result;
+}
+
+function trimPolylineStart(points, distance) {
+    let remaining = distance;
+    while (points.length >= 2 && remaining > 1e-8) {
+        const segmentLength = points[0].distanceTo(points[1]);
+        if (segmentLength <= 1e-8) {
+            points.shift();
+        } else if (remaining >= segmentLength) {
+            remaining -= segmentLength;
+            points.shift();
+        } else {
+            points[0].lerp(points[1], remaining / segmentLength);
+            break;
+        }
+    }
+}
+
+function trimPolylineEnd(points, distance) {
+    let remaining = distance;
+    while (points.length >= 2 && remaining > 1e-8) {
+        const lastIndex = points.length - 1;
+        const segmentLength = points[lastIndex].distanceTo(points[lastIndex - 1]);
+        if (segmentLength <= 1e-8) {
+            points.pop();
+        } else if (remaining >= segmentLength) {
+            remaining -= segmentLength;
+            points.pop();
+        } else {
+            points[lastIndex].lerp(points[lastIndex - 1], remaining / segmentLength);
+            break;
+        }
+    }
+}
+
+function getJointSurfaceDistance(direction, jointAxis, styleParams) {
+    const radius = Math.max(0, styleParams.jointRadius ?? 0);
+    const halfHeight = Math.max(0, (styleParams.jointHeight ?? 0) * 0.5);
+    if (radius === 0 || halfHeight === 0) return 0;
+
+    const unitDirection = direction.clone().normalize();
+    const unitAxis = jointAxis.clone().normalize();
+    const axialAmount = Math.abs(unitDirection.dot(unitAxis));
+    const radialAmount = Math.sqrt(Math.max(0, 1 - axialAmount * axialAmount));
+    const capDistance = axialAmount > 1e-8 ? halfHeight / axialAmount : Infinity;
+    const sideDistance = radialAmount > 1e-8 ? radius / radialAmount : Infinity;
+    return Math.min(capDistance, sideDistance);
+}
+
+function prepareLinkPoints(points, styleParams, {
+    trimStart = false,
+    trimEnd = false,
+    startAxis = new Vector3(0, 0, 1),
+    endAxis = new Vector3(0, 0, 1),
+} = {}) {
+    const prepared = getDistinctLocalPoints(points);
+    if (prepared.length < 2 || !styleParams.trimLinksAtJoints) return prepared;
+
+    const overlap = Math.max(
+        0,
+        styleParams.linkJointOverlap ?? styleParams.linkRadius ?? 0,
+    );
+
+    if (trimStart && prepared.length >= 2) {
+        const direction = prepared[1].clone().sub(prepared[0]);
+        const surfaceDistance = getJointSurfaceDistance(direction, startAxis, styleParams);
+        trimPolylineStart(prepared, Math.max(0, surfaceDistance - overlap));
+    }
+
+    if (trimEnd && prepared.length >= 2) {
+        const lastIndex = prepared.length - 1;
+        const direction = prepared[lastIndex].clone().sub(prepared[lastIndex - 1]);
+        const surfaceDistance = getJointSurfaceDistance(direction, endAxis, styleParams);
+        trimPolylineEnd(prepared, Math.max(0, surfaceDistance - overlap));
+    }
+
+    return getDistinctLocalPoints(prepared);
+}
+
+function createTubeFromLocalPoints(points, radius, color, styleParams) {
+    if (points.length < 2) return null;
     const curve = new CatmullRomCurve3(points);
     const tubeGeo = new TubeGeometry(curve, 32, radius, 8, false);
-    const tubeMat = new MeshBasicMaterial({ color });
-    return new Mesh(tubeGeo, tubeMat);
+    const tube = new Mesh(tubeGeo, createVisualMaterial(color, styleParams));
+    tube.castShadow = styleParams.castShadow ?? false;
+    tube.receiveShadow = styleParams.receiveShadow ?? false;
+    return tube;
 }
 
 function attachJointVisual(joint, styleParams, jointColor) {
     const cylGeo = new CylinderGeometry(styleParams.jointRadius, styleParams.jointRadius, styleParams.jointHeight, 16);
-    const cylMat = new MeshBasicMaterial({ color: jointColor });
-    const cyl = new Mesh(cylGeo, cylMat);
+    const cyl = new Mesh(cylGeo, createVisualMaterial(jointColor, styleParams));
     cyl.rotateX(Math.PI / 2);
+    cyl.castShadow = styleParams.castShadow ?? false;
+    cyl.receiveShadow = styleParams.receiveShadow ?? false;
     joint.add(cyl);
 }
 
 function attachDHLinkVisual(joint, styleParams, linkColor) {
     const dh = joint.dh || {};
-    const d = Number.isFinite(dh.d) ? dh.d : 0;
-    const a = Number.isFinite(dh.a) ? dh.a : 0;
+    const d = dh.d ?? 0;
+    const a = dh.a ?? 0;
+    const alpha = dh.alpha ?? 0;
     const end = new Vector3(a, 0, d);
     if (end.lengthSq() <= 1e-12) return;
 
@@ -194,16 +298,23 @@ function attachDHLinkVisual(joint, styleParams, linkColor) {
         points.push(new Vector3(0, 0, d));
     }
     points.push(end);
-    const tube = createTubeFromLocalPoints(points, styleParams.linkRadius, linkColor);
+    const linkNode = joint.children.find((child) => child?.isLink);
+    const nextJoint = linkNode?.children.find((child) => child?.isJoint);
+    const linkPoints = prepareLinkPoints(points, styleParams, {
+        trimStart: true,
+        trimEnd: Boolean(nextJoint),
+        endAxis: new Vector3(0, -Math.sin(alpha), Math.cos(alpha)),
+    });
+    const tube = createTubeFromLocalPoints(linkPoints, styleParams.linkRadius, linkColor, styleParams);
     if (tube) joint.add(tube);
 }
 
 function attachMDHLinkVisual(hostNode, joint, styleParams, linkColor) {
     if (!hostNode || !joint) return;
     const dh = joint.dh || {};
-    const a = Number.isFinite(dh.a) ? dh.a : 0;
-    const alpha = Number.isFinite(dh.alpha) ? dh.alpha : 0;
-    const d = Number.isFinite(dh.d) ? dh.d : 0;
+    const a = dh.a ?? 0;
+    const alpha = dh.alpha ?? 0;
+    const d = dh.d ?? 0;
     const end = new Vector3(a, -Math.sin(alpha) * d, Math.cos(alpha) * d);
     if (end.lengthSq() <= 1e-12) return;
 
@@ -212,7 +323,12 @@ function attachMDHLinkVisual(hostNode, joint, styleParams, linkColor) {
         points.push(new Vector3(a, 0, 0));
     }
     points.push(end);
-    const tube = createTubeFromLocalPoints(points, styleParams.linkRadius, linkColor);
+    const linkPoints = prepareLinkPoints(points, styleParams, {
+        trimStart: hostNode.isJoint,
+        trimEnd: true,
+        endAxis: new Vector3(0, -Math.sin(alpha), Math.cos(alpha)),
+    });
+    const tube = createTubeFromLocalPoints(linkPoints, styleParams.linkRadius, linkColor, styleParams);
     if (tube) hostNode.add(tube);
 }
 
@@ -231,7 +347,7 @@ class ChainGenerator {
 
         const mode = baseParams.mdhMode ? 'MDH' : 'DH';
         const baseOffset = baseParams.baseOffset || {};
-        const useConvertedParams = baseParams.useConvertedParams === true;
+        const useConvertedParams = baseParams.useConvertedParams ?? false;
         const chainParams = mode === 'MDH' && !useConvertedParams
             ? convertMDH(dhParameters)
             : dhParameters;
@@ -272,7 +388,7 @@ class ChainGenerator {
         root.updateMatrixWorld(true);
 
         if (mode === 'MDH' && styleParams.showAxisHelper) {
-            const axisSize = Number.isFinite(styleParams.axisHelperSize) ? styleParams.axisHelperSize : 0.1;
+            const axisSize = styleParams.axisHelperSize ?? 0.1;
             const baseAxis = new AxesHelper(axisSize);
             baseAxis.matrixAutoUpdate = false;
             chainOwner.robotContainer.add(baseAxis);
@@ -288,7 +404,7 @@ class ChainGenerator {
             if (node.isJoint) {
                 chainOwner.joints.push(node);
                 mdhHosts.push(node.parent?.isLink ? (node.parent.parent?.isJoint ? node.parent.parent : chainOwner.roboticArm) : node);
-                if (typeof styleParams.showAxisHelper === 'boolean') {
+                if (styleParams.showAxisHelper !== undefined) {
                     const axisOptions = {};
                     if (styleParams.axisHelperSize !== undefined) {
                         axisOptions.size = styleParams.axisHelperSize;
@@ -306,7 +422,7 @@ class ChainGenerator {
                 }
                 jointIndex += 1;
 
-                if (typeof styleParams.showDOFHelper === 'boolean') {
+                if (styleParams.showDOFHelper !== undefined) {
                     const dofOptions = {};
                     if (styleParams.dofUseJointColor) {
                         dofOptions.color = jointColor;
@@ -345,9 +461,9 @@ class ChainGenerator {
         } else {
             chainOwner.robotContainer.matrixAutoUpdate = false;
             chainOwner.robotContainer.matrix.identity();
-            const tx = Number.isFinite(baseOffset.x) ? baseOffset.x : 0;
-            const ty = Number.isFinite(baseOffset.y) ? baseOffset.y : 0;
-            const tz = Number.isFinite(baseOffset.z) ? baseOffset.z : 0;
+            const tx = baseOffset.x ?? 0;
+            const ty = baseOffset.y ?? 0;
+            const tz = baseOffset.z ?? 0;
             chainOwner.robotContainer.matrix.setPosition(tx, ty, tz);
         }
     }

@@ -1,7 +1,7 @@
-import { MaterialBase } from '../materials/MaterialBase'
+import { MaterialBase } from '../materials/MaterialBase.js'
 
 class OutputMaterial extends MaterialBase {
-    constructor(target, width, height) {
+    constructor() {
         super({
 
             transparent: false,
@@ -12,7 +12,6 @@ class OutputMaterial extends MaterialBase {
 
             uniforms: {
                 renderTexture: { type: "t", value: null },
-                resolution: { type: "v2", value: null },
                 toneMappingMode: { type: "i", value: 2 },
                 exposure: { type: "f", value: 1.0 },
             },

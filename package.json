@@ -5,9 +5,10 @@
   "scripts": {
     "build-examples": "cd examples && parcel build ./*.html --dist-dir ./bundle/ --public-url . --no-cache --no-content-hash",
     "start": "sh -c '(cd assets && http-server -p 2000 --cors) & (cd examples && parcel serve ./*.html --dist-dir ./dev-bundle/ --no-cache)'",
-    "build-pages": "pnpm run build-examples && node extend/publish/buildPages.js",
+    "build-pages": "pnpm run build-examples && node extend/tools/buildPages.js",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "test:path-tracing": "node --test test/path-tracing/*.test.js"
   },
   "author": "wwjll",
   "license": "ISC",

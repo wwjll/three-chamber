@@ -51,7 +51,7 @@ class RenderLoopController {
     }
 
     start() {
-        if (this._running || typeof this._renderFn !== 'function') {
+        if (this._running || !this._renderFn) {
             return this;
         }
         this._running = true;

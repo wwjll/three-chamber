@@ -15,6 +15,19 @@ const kukaKr5ChainProfile = {
     ],
 };
 
+// Standard DH parameters published by Universal Robots for the UR3e.
+const ur3eChainProfile = {
+    name: 'universal-robots-ur3e',
+    segments: [
+        { theta: 0, axisSign: 1, thetaOffset: 0, d: 0.15185, a: 0, alpha: 90, minAngle: -360, maxAngle: 360 },
+        { theta: -90, axisSign: 1, thetaOffset: 0, d: 0, a: -0.24355, alpha: 0, minAngle: -360, maxAngle: 360 },
+        { theta: 90, axisSign: 1, thetaOffset: 0, d: 0, a: -0.2132, alpha: 0, minAngle: -160, maxAngle: 160 },
+        { theta: -90, axisSign: 1, thetaOffset: 0, d: 0.13105, a: 0, alpha: 90, minAngle: -360, maxAngle: 360 },
+        { theta: -90, axisSign: 1, thetaOffset: 0, d: 0.08535, a: 0, alpha: -90, minAngle: -360, maxAngle: 360 },
+        { theta: 0, axisSign: 1, thetaOffset: 0, d: 0.0921, a: 0, alpha: 0, minAngle: -360, maxAngle: 360 }
+    ],
+};
+
 function positiveModulo(value, mod) {
     const out = value % mod;
     return out < 0 ? out + mod : out;
@@ -46,12 +59,12 @@ function getProfileSegments(profileOrSegments = kukaKr5ChainProfile) {
 function createInitialJointState(profileOrSegments = kukaKr5ChainProfile) {
     const segments = getProfileSegments(profileOrSegments);
     const toRad = Math.PI / 180;
-    return segments.map((segment) => (Number.isFinite(segment.theta) ? segment.theta : 0) * toRad);
+    return segments.map((segment) => (segment.theta ?? 0) * toRad);
 }
 
 function convertSegmentAxisLimitsToDh(segment, axisSign, thetaOffsetDeg) {
-    const minAxisDeg = Number.isFinite(segment.minAngle) ? segment.minAngle : -185;
-    const maxAxisDeg = Number.isFinite(segment.maxAngle) ? segment.maxAngle : 185;
+    const minAxisDeg = segment.minAngle ?? -185;
+    const maxAxisDeg = segment.maxAngle ?? 185;
     const isWrap = minAxisDeg > maxAxisDeg;
 
     const mappedMin = axisSign * minAxisDeg + thetaOffsetDeg;
@@ -72,11 +85,11 @@ function createDhParametersFromJointState(q, profileOrSegments = kukaKr5ChainPro
     const segments = getProfileSegments(profileOrSegments);
     const toRad = Math.PI / 180;
     return segments.map((segment, index) => {
-        const theta = Number.isFinite(q[index]) ? q[index] : 0;
+        const theta = q[index] ?? 0;
         const axisSign = segment.axisSign === -1 ? -1 : 1;
-        const thetaOffsetDeg = Number.isFinite(segment.thetaOffset) ? segment.thetaOffset : 0;
+        const thetaOffsetDeg = segment.thetaOffset ?? 0;
         const thetaOffset = thetaOffsetDeg * toRad;
-        const alpha = (Number.isFinite(segment.alpha) ? segment.alpha : 0) * toRad;
+        const alpha = (segment.alpha ?? 0) * toRad;
         const [minDhDeg, maxDhDeg] = convertSegmentAxisLimitsToDh(segment, axisSign, thetaOffsetDeg);
         return [theta, segment.d, segment.a, alpha, thetaOffset, minDhDeg, maxDhDeg];
     });
@@ -86,14 +99,10 @@ function getBaseAngleRangeCheck({ chain, cubeItem, profile = kukaKr5ChainProfile
     const segments = getProfileSegments(profile);
     const baseJointNode = chain?.joints?.[0] || null;
     const baseJoint = segments[0];
-    const minAngleDeg = Number.isFinite(baseJointNode?.minAngle)
-        ? baseJointNode.minAngle
-        : (Number.isFinite(baseJoint?.minAngle) ? baseJoint.minAngle : null);
-    const maxAngleDeg = Number.isFinite(baseJointNode?.maxAngle)
-        ? baseJointNode.maxAngle
-        : (Number.isFinite(baseJoint?.maxAngle) ? baseJoint.maxAngle : null);
+    const minAngleDeg = baseJointNode?.minAngle ?? baseJoint?.minAngle ?? null;
+    const maxAngleDeg = baseJointNode?.maxAngle ?? baseJoint?.maxAngle ?? null;
     const parentFrame = baseJointNode?.parent || chain?.robotContainer || null;
-    if (!Number.isFinite(minAngleDeg) || !Number.isFinite(maxAngleDeg) || !cubeItem?.mesh || !parentFrame) {
+    if (minAngleDeg === null || maxAngleDeg === null || !cubeItem?.mesh || !parentFrame) {
         return { valid: true };
     }
 
@@ -134,24 +143,17 @@ class ChainController {
         updateReachRangePose,
     } = {}) {
         this.chain = chain ?? null;
-        this.getSequencePlayer = typeof getSequencePlayer === 'function'
-            ? getSequencePlayer
-            : () => null;
+        this.getSequencePlayer = getSequencePlayer ?? (() => null);
         this.profile = profile ?? { segments: [] };
         this.styleParams = styleParams ?? {};
         this.baseParams = baseParams ?? {};
-        this.createInitialJointState = typeof createInitialJointStateFn === 'function'
-            ? createInitialJointStateFn
-            : createInitialJointState;
-        this.createDhParametersFromJointState = typeof createDhParametersFromJointStateFn === 'function'
-            ? createDhParametersFromJointStateFn
-            : createDhParametersFromJointState;
-        this.getToolEuler = typeof getToolEuler === 'function'
-            ? getToolEuler
-            : () => ({ x: 0, y: 0, z: 0 });
-        this.updateReachRangePose = typeof updateReachRangePose === 'function'
-            ? updateReachRangePose
-            : () => {};
+        this.createInitialJointState = createInitialJointStateFn
+            ?? createInitialJointState;
+        this.createDhParametersFromJointState = createDhParametersFromJointStateFn
+            ?? createDhParametersFromJointState;
+        this.getToolEuler = getToolEuler
+            ?? (() => ({ x: 0, y: 0, z: 0 }));
+        this.updateReachRangePose = updateReachRangePose ?? (() => {});
     }
 
     setProfile(profile) {
@@ -246,6 +248,7 @@ class ChainController {
 
 export {
     kukaKr5ChainProfile,
+    ur3eChainProfile,
     createInitialJointState,
     convertSegmentAxisLimitsToDh,
     createDhParametersFromJointState,

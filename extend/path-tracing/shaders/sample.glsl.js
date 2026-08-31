@@ -1,13 +1,7 @@
 const Sample =  /* glsl */`
-    #define MAX_ENV_CDF_BINARY_SEARCH_STEPS 12
-
-    vec3 SampleHemisphere() {
-        beginRandomDomain(RNG_DOMAIN_HEMISPHERE);
-        float z = rand();
-        float r = max(0.0, sqrt(1.0 - z * z));
-        float phi = 2.0 * PI * rand();
-        return vec3(r * cos(phi), r * sin(phi), z);
-    }
+    #define BSDF_EVENT_DIFFUSE uint(1)
+    #define BSDF_EVENT_GLOSSY uint(2)
+    #define BSDF_EVENT_REFLECTION uint(4)
 
     vec3 SampleCosineHemisphere() {
         beginRandomDomain(RNG_DOMAIN_COSINE_HEMISPHERE);
@@ -31,88 +25,6 @@ const Sample =  /* glsl */`
         return vec2(phi, theta);
     }
 
-    vec3 envUVToDirection(vec2 uv) {
-        float latitude = (uv.y - 0.5) * PI;
-        float phi = (uv.x - 0.5) * TWO_PI;
-        float cosLatitude = cos(latitude);
-        return normalize(vec3(
-            cos(phi) * cosLatitude,
-            sin(latitude),
-            sin(phi) * cosLatitude
-        ));
-    }
-
-    int binarySearchMarginalCDF(float value) {
-        int low = 0;
-        int high = int(hdrResolution.y) - 1;
-        for (int i = 0; i < MAX_ENV_CDF_BINARY_SEARCH_STEPS; i++) {
-            if (low >= high) {
-                break;
-            }
-            int mid = (low + high) / 2;
-            float cdf = texelFetch(hdrMarginalDistributionTexture, ivec2(mid, 0), 0).r;
-            if (value <= cdf) {
-                high = mid;
-            } else {
-                low = mid + 1;
-            }
-        }
-        return clamp(low, 0, int(hdrResolution.y) - 1);
-    }
-
-    int binarySearchConditionalCDF(int row, float value) {
-        int low = 0;
-        int high = int(hdrResolution.x) - 1;
-        for (int i = 0; i < MAX_ENV_CDF_BINARY_SEARCH_STEPS; i++) {
-            if (low >= high) {
-                break;
-            }
-            int mid = (low + high) / 2;
-            float cdf = texelFetch(hdrConditionalDistributionTexture, ivec2(mid, row), 0).r;
-            if (value <= cdf) {
-                high = mid;
-            } else {
-                low = mid + 1;
-            }
-        }
-        return clamp(low, 0, int(hdrResolution.x) - 1);
-    }
-
-    float EnvironmentPDF(vec3 direction) {
-        if (hdrTotalWeight <= EPSILON) {
-            return 0.0;
-        }
-
-        vec2 uv = directionToEnvUV(direction);
-        vec3 radiance = min(texture(hdrTexture, uv).rgb, vec3(10.0));
-        float environmentLuminance = luminance(radiance);
-        return max(environmentLuminance, 0.0) * hdrResolution.x * hdrResolution.y / max(2.0 * PI * PI * hdrTotalWeight, EPSILON);
-    }
-
-    vec3 SampleEnvironmentDirection(out float samplePdf) {
-        if (hdrTotalWeight <= EPSILON) {
-            samplePdf = 0.0;
-            return vec3(0.0, 1.0, 0.0);
-        }
-
-        beginRandomDomain(RNG_DOMAIN_ENVIRONMENT);
-        int row = binarySearchMarginalCDF(rand());
-        int column = binarySearchConditionalCDF(row, rand());
-        vec2 uv = (vec2(float(column), float(row)) + vec2(0.5)) / hdrResolution;
-        vec3 direction = envUVToDirection(uv);
-        samplePdf = EnvironmentPDF(direction);
-        return direction;
-    }
-    
-    vec3 toNormalHemisphere(vec3 v, vec3 N) {
-        vec3 helper = vec3(1, 0, 0);
-        if (abs(N.x) > 0.999)
-            helper = vec3(0, 0, 1);
-        vec3 tangent = normalize(cross(N, helper));
-        vec3 bitangent = normalize(cross(N, tangent));
-        return v.x * tangent + v.y * bitangent + v.z * N;
-    }
-
     vec3 SampleGGXHalfVector(float alpha, vec3 tangent, vec3 bitangent, vec3 normal) {
         beginRandomDomain(RNG_DOMAIN_GGX);
         float u1 = rand();
@@ -129,40 +41,48 @@ const Sample =  /* glsl */`
         return toTangentFrame(localHalfVector, tangent, bitangent, normal);
     }
 
-    vec3 SampleBRDFDirection(
+    BSDFSample SampleBSDF(
         vec3 viewDirection,
         vec3 surfaceNormal,
         vec3 tangent,
         vec3 bitangent,
-        Material material,
-        out float samplePdf
+        Material material
     ) {
         beginRandomDomain(RNG_DOMAIN_BRDF);
-        float specularWeight = BRDFSpecularSampleWeight(material);
+        float specularWeight = BSDFSpecularSampleWeight(material);
         bool sampleSpecular = rand() < specularWeight;
         vec3 sampledDirection;
+        uint sampledFlags;
 
         if(sampleSpecular) {
+            sampledFlags = BSDF_EVENT_GLOSSY | BSDF_EVENT_REFLECTION;
             float alpha = max(material.roughness * material.roughness, 0.001);
             vec3 halfVector = SampleGGXHalfVector(alpha, tangent, bitangent, surfaceNormal);
             sampledDirection = reflect(-viewDirection, halfVector);
             if(dot(sampledDirection, surfaceNormal) <= 0.0) {
-                sampleSpecular = false;
+                return BSDFSample(sampledDirection, vec3(0.0), 0.0, sampledFlags, false);
             }
-        }
-
-        if(!sampleSpecular) {
+        } else {
+            sampledFlags = BSDF_EVENT_DIFFUSE | BSDF_EVENT_REFLECTION;
             sampledDirection = toTangentFrame(SampleCosineHemisphere(), tangent, bitangent, surfaceNormal);
         }
 
-        samplePdf = BRDFPDF(viewDirection, surfaceNormal, sampledDirection, material);
-        return sampledDirection;
-    }
-    
-    vec3 sampleHdr(Ray ray) {
-        vec3 color = texture(hdrTexture, directionToEnvUV(ray.direction)).rgb;
-        // clamp to prevent hdr firefly
-        return min(color, vec3(10.0));
+        float samplePdf = BSDFPDF(viewDirection, surfaceNormal, sampledDirection, material);
+        float incomingCosine = max(dot(sampledDirection, surfaceNormal), 0.0);
+        if(samplePdf <= EPSILON || incomingCosine <= 0.0) {
+            return BSDFSample(sampledDirection, vec3(0.0), samplePdf, sampledFlags, false);
+        }
+
+        vec3 bsdf = BSDFEvaluate(
+            viewDirection,
+            surfaceNormal,
+            sampledDirection,
+            tangent,
+            bitangent,
+            material
+        );
+        vec3 sampleWeight = bsdf * incomingCosine / samplePdf;
+        return BSDFSample(sampledDirection, sampleWeight, samplePdf, sampledFlags, true);
     }
 
 `

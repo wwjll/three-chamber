@@ -1,12 +1,12 @@
-import { Box3, Clock, EquirectangularReflectionMapping, PMREMGenerator, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
+import { Box3, EquirectangularReflectionMapping, PMREMGenerator, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { Pane } from 'tweakpane';
-import { SceneGenerator } from "../extend/path-tracing/SceneGenerator";
-import { PathTracer } from "../extend/path-tracing/PathTracer";
+import { SceneCompiler } from "../extend/path-tracing/compiler/SceneCompiler.js";
+import { PathTracer } from "../extend/path-tracing/PathTracer.js";
 
 import { getAssetURL } from '/extend/tools/Tool.js'
 
@@ -31,18 +31,17 @@ const hdrOptions = {
 };
 const info = document.querySelector("#info");
 
-let renderer, scene, camera, controls, stats, clock, pane;
+let renderer, scene, camera, controls, stats, pane;
 let pathTracer;
 let pmremGenerator;
 let currentModel = null;
 let currentEnvironmentBackground = null;
 let currentEnvironmentTarget = null;
+let currentCompiledScene = null;
 let loadGeneration = 0;
 let currentModelHasAlbedoTexture = false;
 let resumeTraceTimer = null;
-let persistedCameraState = null;
 const BG_COLOR = 0x333333;
-const PATH_TRACING_STATE_STORAGE_KEY = 'three-chamber:path-tracing-state';
 const sceneParams = {
     model: 'DamagedHelmet',
     environment: 'Daytime',
@@ -60,10 +59,6 @@ const renderParams = {
     interactionResumeDelayMs: 500,
     toneMapping: 'none',
     exposure: 1.0,
-};
-const samplingParams = {
-    environmentMissMIS: true,
-    directEnvironmentMIS: false,
 };
 const debugModeOptions = {
     Off: 'lit',
@@ -121,8 +116,8 @@ const outputToneMappingValues = {
     aces: 2,
 };
 let cameraMoving = false;
+const sceneCompiler = new SceneCompiler();
 
-restorePersistedState();
 init();
 
 function modelHasAlbedoTexture(model) {
@@ -172,7 +167,6 @@ function applySelectedAlbedoTexture() {
         ? materialPresetValues.off
         : materialPresetValues[materialParams.material];
 
-    pathTracer.setOriginMaterialInfo(null);
     pathTracer.setMaterialPreset(materialPreset);
 }
 
@@ -186,60 +180,6 @@ function applySelectedDebugMode() {
 function applyOutputSettings() {
     pathTracer.setOutputToneMapping(outputToneMappingValues[renderParams.toneMapping]);
     pathTracer.setOutputExposure(renderParams.exposure);
-}
-
-function restorePersistedState() {
-    const rawState = sessionStorage.getItem(PATH_TRACING_STATE_STORAGE_KEY);
-    if (!rawState) {
-        return;
-    }
-
-    try {
-        const state = JSON.parse(rawState);
-        Object.assign(sceneParams, state.sceneParams || {});
-        Object.assign(materialParams, state.materialParams || {});
-        Object.assign(renderParams, state.renderParams || {});
-        Object.assign(samplingParams, state.samplingParams || {});
-        persistedCameraState = state.camera || null;
-    } catch (error) {
-        console.warn('[PathTracing] Failed to restore persisted state.', error);
-    }
-}
-
-function persistCurrentState() {
-    const state = {
-        sceneParams: { ...sceneParams },
-        materialParams: { ...materialParams },
-        renderParams: { ...renderParams },
-        samplingParams: { ...samplingParams },
-        camera: camera && controls ? {
-            position: camera.position.toArray(),
-            target: controls.target.toArray(),
-        } : persistedCameraState,
-    };
-
-    sessionStorage.setItem(PATH_TRACING_STATE_STORAGE_KEY, JSON.stringify(state));
-}
-
-function reloadForShaderRecompile() {
-    persistCurrentState();
-    location.reload();
-}
-
-function restorePersistedCameraState() {
-    if (!persistedCameraState) {
-        return;
-    }
-
-    if (Array.isArray(persistedCameraState.position)) {
-        camera.position.fromArray(persistedCameraState.position);
-    }
-    if (Array.isArray(persistedCameraState.target)) {
-        controls.target.fromArray(persistedCameraState.target);
-    }
-    camera.updateProjectionMatrix();
-    camera.updateMatrixWorld(true);
-    controls.update();
 }
 
 function kickTraceFrame() {
@@ -342,14 +282,14 @@ async function loadSceneAssets() {
     currentModelHasAlbedoTexture = modelHasAlbedoTexture(currentModel);
     scene.add(currentModel);
     fitCameraToObject(currentModel);
-    restorePersistedCameraState();
 
-    const sceneGenerator = new SceneGenerator(currentModel);
-    const { triangle, bvh, material } = sceneGenerator.generate();
+    const compiledScene = sceneCompiler.compile(currentModel);
 
     setSceneEnvironment(envTexture);
     pathTracer.setHdrTexture(envTexture);
-    pathTracer.setDataTexture(triangle, bvh, material);
+    pathTracer.setScene(compiledScene);
+    currentCompiledScene?.dispose();
+    currentCompiledScene = compiledScene;
     applySelectedAlbedoTexture();
     applySelectedDebugMode();
     camera.updateProjectionMatrix();
@@ -384,7 +324,6 @@ async function init() {
 
     controls = new OrbitControls(camera, renderer.domElement);
     controls.target = new Vector3(0, 0, 0);
-    clock = new Clock();
     stats = new Stats();
     document.body.appendChild(stats.dom);
 
@@ -398,8 +337,6 @@ async function init() {
     pathTracer.setSize(WIDTH * renderParams.renderScale, HEIGHT * renderParams.renderScale);
     pathTracer.setBounce(renderParams.bounceCount);
     pathTracer.setTransparentSteps(renderParams.transparentSteps);
-    pathTracer.setEnvironmentMissMIS(samplingParams.environmentMissMIS);
-    pathTracer.setDirectEnvironmentMIS(samplingParams.directEnvironmentMIS);
     applySelectedDebugMode();
     applyOutputSettings();
 
@@ -486,7 +423,6 @@ function initPane() {
         })
         .on('change', () => {
             applyOutputSettings();
-            pathTracer.reset();
         });
     renderFolder
         .addBinding(renderParams, 'exposure', {
@@ -497,23 +433,6 @@ function initPane() {
         })
         .on('change', () => {
             applyOutputSettings();
-            pathTracer.reset();
-        });
-
-    const samplingFolder = pane.addFolder({ title: 'Sampling' });
-    samplingFolder
-        .addBinding(samplingParams, 'environmentMissMIS', {
-            label: 'Env Miss MIS (recompile)',
-        })
-        .on('change', () => {
-            reloadForShaderRecompile();
-        });
-    samplingFolder
-        .addBinding(samplingParams, 'directEnvironmentMIS', {
-            label: 'Env MIS (recompile)',
-        })
-        .on('change', () => {
-            reloadForShaderRecompile();
         });
 
     const debugFolder = pane.addFolder({ title: 'Debug' });
@@ -545,6 +464,14 @@ function event() {
         pathTracer.reset();
         pathTracer.setSize(innerWidth * renderParams.renderScale, innerHeight * renderParams.renderScale);
         pathTracer.update();
+    });
+
+    window.addEventListener('beforeunload', () => {
+        clearResumeTraceTimer();
+        pathTracer.dispose();
+        currentCompiledScene?.dispose();
+        disposeSceneEnvironment();
+        pmremGenerator.dispose();
     });
 
     controls.addEventListener('start', () => {

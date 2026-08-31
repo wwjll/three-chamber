@@ -19,19 +19,18 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 
 ## Kinematic and Robotic
 
--   **IK Pick**
+-   **IK Model Pick**
 
-    Pick-and-place robotic arm demo with IK, staged motion, and physics-based cube grasp/release.
+    UR3e + Robotiq pick-and-place demo with recorded full-chain keyframes, configurable orientation constraints, DLS IK, staged motion, and physics-based cube grasp/release.
 
-    [Preview](https://wwjll.github.io/three-chamber/ikPick.html)
+    [Preview](https://wwjll.github.io/three-chamber/ikModelPick.html)
 
-    ![IK Pick](./assets/docs/IKPick.png)
+    ![IK Model Pick](./assets/docs/IKModelPick.gif)
 
 -   **Simple IK**
 
-    Position/rotation target driven IK demo with draggable end-effector control.  
-    Math principle: use task error $e=[e_p,e_r]$, where $e_p=p_t-p(q)$ and $e_r$ is orientation error from quaternion difference.  
-    For revolute joint $i$, Jacobian columns are $J_{v,i}=a_i \times (p-p_i)$ and $J_{w,i}=a_i$, then update with gradient step $\Delta q=\alpha J^T e$.
+    Position-target IK demo with draggable end-effector control, selectable DLS/basic IK, and convergence statistics.
+    Supports KUKA KR5 and UR3e robot profiles with procedural or loaded model visualization.
 
     [Preview](https://wwjll.github.io/three-chamber/ik.html)
 
@@ -40,7 +39,7 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
 -   **DH Links**
 
     Denavit-Hartenberg robotic arm modeling demo.  
-    Shows DH links clearly, with connections rendered as 3d Bezier curves.  
+    Shows lit DH links clearly, with connections rendered as 3D Bezier curves.
     In MDH mode, I add an extra parameter set so there is an end joint for consistency.  
     I started using Codex for this example.  
 
@@ -87,11 +86,3 @@ Find more in my blog : [juejin](https://juejin.cn/user/46634010687316/posts)
     [Preview](https://wwjll.github.io/three-chamber/dissolve.html)
 
     ![Dissolve](./assets/docs/Dissolve.gif)
-
--   **HeightWarp**
-
-    Heightmap-driven distortion effect using custom shader passes
-
-    [Preview](https://wwjll.github.io/three-chamber/heightWarp.html)
-
-    ![HeightWarp](./assets/docs/HeightWarp.gif)
