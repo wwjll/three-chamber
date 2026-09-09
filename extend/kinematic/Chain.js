@@ -151,7 +151,12 @@ class Actuator {
 
     _applyPhysicsColliderBoxes(boxes) {
         if (!this.physicsWorld || !this._physicsBody) return;
-        this._clearPhysicsColliders();
+        const topologyChanged = boxes.length !== this._physicsColliders.length
+            || boxes.some((box, index) => (box.role ?? 'body') !== this._physicsColliderBoxes[index]?.role);
+        if (topologyChanged) {
+            this._clearPhysicsColliders();
+        }
+        const previousBoxes = this._physicsColliderBoxes;
         this._physicsColliderBoxes = boxes.map((box) => ({
             name: box.name ?? 'collider',
             role: box.role ?? 'body',
@@ -164,26 +169,33 @@ class Actuator {
                 w: box.quaternion?.w ?? 1,
             },
         }));
-        const build = (box) => {
+        for (let index = 0; index < this._physicsColliderBoxes.length; index++) {
+            const box = this._physicsColliderBoxes[index];
             const { halfExtents, position, quaternion } = box;
-            const collider = this.physicsWorld.createCollider(
-                ColliderDesc.cuboid(
-                    halfExtents.x,
-                    halfExtents.y,
-                    halfExtents.z,
-                )
-                    .setTranslation(position.x, position.y, position.z)
-                    .setRotation(quaternion)
-                    .setFriction(1.0),
-                this._physicsBody,
-            );
-            collider.setCollisionGroups(_GRIPPER_INTERACTION_GROUPS);
-            collider.setSolverGroups(_GRIPPER_INTERACTION_GROUPS);
-            return collider;
-        };
-        for (const box of this._physicsColliderBoxes) {
-            const collider = build(box);
-            this._physicsColliders.push(collider);
+            let collider = this._physicsColliders[index];
+            if (!collider) {
+                collider = this.physicsWorld.createCollider(
+                    ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
+                        .setTranslation(position.x, position.y, position.z)
+                        .setRotation(quaternion)
+                        .setFriction(1.0),
+                    this._physicsBody,
+                );
+                collider.setCollisionGroups(_GRIPPER_INTERACTION_GROUPS);
+                collider.setSolverGroups(_GRIPPER_INTERACTION_GROUPS);
+                this._physicsColliders.push(collider);
+            } else {
+                const previous = previousBoxes[index];
+                if (['x', 'y', 'z'].some((axis) => halfExtents[axis] !== previous.halfExtents[axis])) {
+                    collider.setHalfExtents(halfExtents);
+                }
+                if (['x', 'y', 'z'].some((axis) => position[axis] !== previous.position[axis])) {
+                    collider.setTranslationWrtParent(position);
+                }
+                if (['x', 'y', 'z', 'w'].some((axis) => quaternion[axis] !== previous.quaternion[axis])) {
+                    collider.setRotationWrtParent(quaternion);
+                }
+            }
             if (box.role === 'rail') {
                 this._railCollider = collider;
             } else if (box.role === 'leftJaw') {
@@ -281,20 +293,24 @@ class Actuator {
         this.leftJawMesh.scale.set(jawXSize, jawYSize, jawZSize);
         this.rightJawMesh.scale.set(jawXSize, jawYSize, jawZSize);
 
-        this._rebuildPhysicsColliders({
-            mountRadius,
-            mountLength,
-            mountCenterX,
-            railXSize,
-            railYSize,
-            railZSize,
-            railCenterX,
-            jawXSize,
-            jawYSize,
-            jawZSize,
-            jawCenterX,
-            jawOffset,
-        });
+        // Custom rig colliders are synchronized by their owner after changing
+        // the gripper pose; rebuilding here would apply the previous pose twice.
+        if (!this._customPhysicsColliderBoxes) {
+            this._rebuildPhysicsColliders({
+                mountRadius,
+                mountLength,
+                mountCenterX,
+                railXSize,
+                railYSize,
+                railZSize,
+                railCenterX,
+                jawXSize,
+                jawYSize,
+                jawZSize,
+                jawCenterX,
+                jawOffset,
+            });
+        }
 
         const gripX = (jawCenterX + jawXSize * 0.5 - jawYSize * 0.4) * cfg.gripForwardScale;
         this.gripPoint.position.set(gripX, 0, 0);
@@ -626,15 +642,13 @@ class Chain {
 
             if (joint.mode === 'MDH' || joint.mdh) {
                 const d = joint.mdh?.d ?? dh.d ?? 0;
-                const m = new Matrix4().makeRotationZ(theta);
-                m.setPosition(0, 0, d);
-                joint.matrix.copy(m);
+                joint.matrix.makeRotationZ(theta);
+                joint.matrix.setPosition(0, 0, d);
                 if (joint.mdh) joint.mdh.theta = theta;
                 if (joint.dh) joint.dh.theta = theta;
                 joint.mode = 'MDH';
             } else {
-                const m = new Matrix4().makeRotationZ(theta);
-                joint.matrix.copy(m);
+                joint.matrix.makeRotationZ(theta);
                 if (joint.dh) joint.dh.theta = theta;
                 joint.mode = 'DH';
             }

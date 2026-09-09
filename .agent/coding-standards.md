@@ -29,3 +29,10 @@
   an invalid value into a default.
 - Extract a helper only when it names a meaningful concept or removes substantial
   duplication. Keep one-line expressions inline when they remain readable.
+
+## Project Scope
+
+- Focus on engineering and graphics prototype validation.
+- Keep features and abstractions small enough to understand and experiment with.
+- Avoid detailed production engineering systems unless explicitly requested;
+  add only what the prototype needs to demonstrate its behavior.

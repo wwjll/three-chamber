@@ -193,6 +193,7 @@ class SequenceGenerator {
             ?? options.setCurrentJointState
             ?? ((joints) => this.sequencePlayer?.setJointState?.(joints));
         this.sampleChainPose = options.sampleChainPose ?? null;
+        this.jointLimits = options.jointLimits ?? null;
 
         this.defaultDurationMs = sanitizeDuration(options.defaultDurationMs, 400);
         this.defaultGripDurationMs = sanitizeDuration(
@@ -428,12 +429,14 @@ class SequenceGenerator {
             _editorEuler.setFromQuaternion(_worldQuaternion, 'XYZ');
         }
         const explicitChainPose = this._sanitizeChainPose(
-            options.chainPose ?? options.joints,
+            options.chainPose !== undefined ? options.chainPose : options.joints,
         );
-        const currentChainPose = explicitChainPose
-            ?? this._sanitizeChainPose(this.getCurrentChainPose());
+        const currentChainPose = options.chainPose !== undefined
+            || options.joints !== undefined
+            ? explicitChainPose
+            : this._sanitizeChainPose(this.getCurrentChainPose());
         if (!currentChainPose) {
-            this.onStatus('A complete six-joint chain pose is required');
+            this.onStatus('A finite six-joint pose within the robot limits is required');
             return null;
         }
         return {
@@ -554,7 +557,7 @@ class SequenceGenerator {
                 this.getCurrentChainPose(),
             );
             if (!currentChainPose) {
-                this.onStatus('A complete six-joint chain pose is required');
+                this.onStatus('A finite six-joint pose within the robot limits is required');
                 return false;
             }
             if (!this._getCurrentWorldPose(
@@ -602,6 +605,9 @@ class SequenceGenerator {
     }
 
     selectKeyframe(index, { preview = true } = {}) {
+        if (preview && this.sequencePlayer?.isActive?.()) {
+            this.stop();
+        }
         const nextIndex = clampIndex(index, this.keyframes.length);
         if (nextIndex < 0) {
             this.selectedIndex = -1;
@@ -654,7 +660,11 @@ class SequenceGenerator {
         if (
             !Array.isArray(values)
             || values.length !== JOINT_CHANNELS.length
-            || values.some((value) => !Number.isFinite(value))
+            || Array.from(values).some((value, index) => {
+                const limit = this.jointLimits?.[index];
+                return !Number.isFinite(value)
+                    || (limit && (value < limit.min || value > limit.max));
+            })
         ) {
             return null;
         }
@@ -736,6 +746,14 @@ class SequenceGenerator {
                 kind: GENERATED_TARGET_KIND,
                 keyframeId: keyframe.id,
             };
+            if (keyframe.kind === 'recorded') {
+                const chainPose = this._sanitizeChainPose(keyframe.chainPose);
+                if (!chainPose) {
+                    throw new RangeError('Recorded pose exceeds the robot joint limits.');
+                }
+                // Recorded execution targets are snapshots, independent of later edits.
+                target.chainPose = chainPose;
+            }
             const commonStep = {
                 id: `${keyframe.id}-pose`,
                 target,
@@ -814,7 +832,11 @@ class SequenceGenerator {
 
     resolveJointState(targetSpec, context, outJointState) {
         const keyframe = this._findTargetKeyframe(targetSpec);
-        const chainPose = this._sanitizeChainPose(keyframe?.chainPose);
+        const chainPose = this._sanitizeChainPose(
+            targetSpec?.chainPose !== undefined
+                ? targetSpec.chainPose
+                : keyframe?.chainPose,
+        );
         if (!chainPose) {
             return false;
         }
@@ -1199,6 +1221,9 @@ class SequenceGenerator {
     }
 
     _applyFormTransformToTarget() {
+        if (this.sequencePlayer?.isActive?.()) {
+            this.stop();
+        }
         if (!this.targetObject) {
             return;
         }
@@ -1347,6 +1372,9 @@ class SequenceGenerator {
             'dragging-changed',
             (event) => {
                 this._isDraggingTarget = event.value;
+                if (event.value && this.sequencePlayer?.isActive?.()) {
+                    this.stop();
+                }
                 if (this.orbitControls) {
                     this.orbitControls.enabled = !this._isDraggingTarget;
                 }
@@ -1959,7 +1987,12 @@ class SequenceGenerator {
         const range = this._graphChannelRanges[drag.channelIndex] ?? channel;
         const value = range.min
             + normalized * (range.max - range.min);
-        keyframe.chainPose[channel.index] = MathUtils.degToRad(value);
+        const limit = this.jointLimits?.[channel.index];
+        keyframe.chainPose[channel.index] = clamp(
+            MathUtils.degToRad(value),
+            limit?.min ?? -Infinity,
+            limit?.max ?? Infinity,
+        );
 
         const timelineWidth = Math.max(
             1,

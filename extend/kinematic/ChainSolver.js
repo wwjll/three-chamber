@@ -20,7 +20,8 @@
  * - `joints`: ordered joint list for Jacobian construction.
  * - `maxIter`: max solver iterations per solve call.
  * - `alpha`: base step size used for update scaling.
- * - `tolerance`: convergence threshold (task-space norm).
+ * - `tolerance`: position convergence threshold in scene units.
+ * - `rotationTolerance`: orientation convergence threshold in radians.
  * - `solveMode`: `'Position Only'` or `'Position + Rotation'`.
  * - `debug`: enables optional verbose logging hooks.
  *
@@ -117,6 +118,7 @@ class ChainSolver {
             options.rotationTolerance ?? 0.03,
         );
         this.lastIterationCount = 0;
+        this._lastSolveResult = null;
         this.debug = options.debug ?? false;
         this.joints = options.joints ?? null;
         this.thetaOffsets = options.thetaOffsets?.slice() ?? [];
@@ -261,6 +263,71 @@ class ChainSolver {
         return this.solveMode === 'Position + Rotation';
     }
 
+    isTaskConverged(positionError, rotationError, {
+        positionTolerance = this.tolerance,
+        rotationTolerance = this.rotationTolerance,
+    } = {}) {
+        return positionError <= Math.max(1e-6, positionTolerance)
+            && (
+                !this.isPositionAndRotationMode()
+                || rotationError <= Math.max(1e-6, rotationTolerance)
+            );
+    }
+
+    // Evaluating a pose applies FK(q); callers can read getSolveResult() without resampling.
+    evaluateConvergence(q, {
+        positionTolerance = this.tolerance,
+        rotationTolerance = this.rotationTolerance,
+    } = {}) {
+        const { posErr, rotErr } = this.computeTaskError(q);
+        const positionError = posErr.length();
+        const rotationError = rotErr.length();
+        const thresholds = {
+            positionTolerance: Math.max(1e-6, positionTolerance),
+            rotationTolerance: Math.max(1e-6, rotationTolerance),
+        };
+        const includeRotation = this.isPositionAndRotationMode();
+        const finite = Number.isFinite(positionError)
+            && (!includeRotation || Number.isFinite(rotationError));
+        return {
+            ...thresholds,
+            positionError,
+            rotationError,
+            errorNorm: includeRotation
+                ? Math.hypot(positionError, rotationError)
+                : positionError,
+            finite,
+            converged: finite && this.isTaskConverged(
+                positionError,
+                rotationError,
+                thresholds,
+            ),
+        };
+    }
+
+    _recordSolveResult(q, options = {}, numericalFailure = false) {
+        // Re-evaluate the returned state so rejected trials cannot remain in FK.
+        const convergence = this.evaluateConvergence(q, options);
+        this._lastSolveResult = {
+            ...convergence,
+            q: q.slice(),
+            iterations: this.lastIterationCount,
+            status: numericalFailure || !convergence.finite
+                ? 'numerical-failure'
+                : convergence.converged ? 'converged' : 'iteration-limit',
+        };
+    }
+
+    getSolveResult() {
+        if (!this._lastSolveResult) {
+            return null;
+        }
+        return {
+            ...this._lastSolveResult,
+            q: this._lastSolveResult.q.slice(),
+        };
+    }
+
     computeSolveErrorNorm(q) {
         if (this.isPositionAndRotationMode()) {
             return this.computeTaskErrorNorm(q);
@@ -315,22 +382,28 @@ class ChainSolver {
     }
 
     computeJacobianNumeric(q) {
-        // Finite-difference Jacobian for position only; kept for debug/fallback checks.
-        const eps = 1e-2;
+        // Central differences measure d(position)/dq, matching the analytic columns.
+        const eps = 1e-5;
         const n = q.length;
         const jacobian = [new Array(n), new Array(n), new Array(n)];
-        const baseError = this.computePositionError(q);
+        const qPerturbed = q.slice();
 
-        for (let i = 0; i < n; i++) {
-            const qPerturbed = q.slice();
-            qPerturbed[i] += eps;
+        try {
+            for (let i = 0; i < n; i++) {
+                qPerturbed[i] = q[i] - eps;
+                const negativeError = this.computePositionError(qPerturbed);
+                qPerturbed[i] = q[i] + eps;
+                const positiveError = this.computePositionError(qPerturbed);
+                const column = negativeError.sub(positiveError)
+                    .multiplyScalar(1 / (2 * eps));
+                qPerturbed[i] = q[i];
 
-            const perturbedError = this.computePositionError(qPerturbed);
-            const column = perturbedError.clone().sub(baseError).multiplyScalar(1 / eps);
-
-            jacobian[0][i] = column.x;
-            jacobian[1][i] = column.y;
-            jacobian[2][i] = column.z;
+                jacobian[0][i] = column.x;
+                jacobian[1][i] = column.y;
+                jacobian[2][i] = column.z;
+            }
+        } finally {
+            this.forwardKinematics?.(q);
         }
 
         return jacobian;
@@ -342,10 +415,11 @@ class ChainSolver {
             1e-4,
             options.maxDelta ?? this.dlsMaxDelta,
         );
-        const rotationWeight = Math.max(
+        const includeRotation = this.isPositionAndRotationMode();
+        const rotationWeight = includeRotation ? Math.max(
             0,
             options.rotationWeight ?? this.rotationWeight,
-        );
+        ) : 0;
         const positionTolerance = Math.max(
             1e-6,
             options.positionTolerance ?? this.tolerance,
@@ -356,9 +430,10 @@ class ChainSolver {
         );
         let damping = Math.max(1e-5, options.damping ?? this.damping);
         const q = qe.slice();
+        let numericalFailure = false;
         this.lastIterationCount = 0;
         const jointLimits = this.buildJointLimits(q.length);
-        const rowCount = this.isPositionAndRotationMode() ? 6 : 3;
+        const rowCount = includeRotation ? 6 : 3;
         const scratch = this._dlsScratch;
         const {
             rowWeights,
@@ -389,13 +464,10 @@ class ChainSolver {
         for (let iteration = 0; iteration < maxIter; iteration++) {
             this.lastIterationCount = iteration + 1;
             const { posErr, rotErr } = this.computeTaskError(q);
-            if (
-                posErr.length() <= positionTolerance
-                && (
-                    !this.isPositionAndRotationMode()
-                    || rotErr.length() <= rotationTolerance
-                )
-            ) {
+            if (this.isTaskConverged(posErr.length(), rotErr.length(), {
+                positionTolerance,
+                rotationTolerance,
+            })) {
                 break;
             }
 
@@ -430,6 +502,7 @@ class ChainSolver {
                 taskStep,
                 augmented,
             )) {
+                numericalFailure = true;
                 break;
             }
 
@@ -466,7 +539,10 @@ class ChainSolver {
                 damping = Math.min(1, damping * 2);
             }
         }
-        this.forwardKinematics?.(q);
+        this._recordSolveResult(q, {
+            positionTolerance,
+            rotationTolerance,
+        }, numericalFailure);
         return q;
     }
 
@@ -483,7 +559,6 @@ class ChainSolver {
         // maxDelta limits single-joint jump size per trial step.
         const maxIter = this.maxIter;
         let alpha = this.alpha;
-        const tolerance = this.tolerance;
         const maxRetry = 5;
         const maxDelta = 0.05;
         const improveTol = 1e-9;
@@ -524,8 +599,8 @@ class ChainSolver {
                 )
                 : Math.hypot(errorVec6[0], errorVec6[1], errorVec6[2]);
 
-            // Convergence test uses the active task norm (3D or 6D).
-            if (errorNorm < tolerance) {
+            // Position and orientation use separate physical tolerances in both methods.
+            if (this.isTaskConverged(posErr.length(), rotErr.length())) {
                 if (this.debug) {
                     console.log(`[IK] iter=${iter} errorNorm=${errorNorm} maxAbsDq=0 alpha=${alpha} converged=true`);
                 }
@@ -616,6 +691,7 @@ class ChainSolver {
             alpha = Math.min(alpha * 1.2, maxAlpha);
         }
 
+        this._recordSolveResult(q);
         return q;
     }
 }

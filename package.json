@@ -8,6 +8,7 @@
     "build-pages": "pnpm run build-examples && node extend/tools/buildPages.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "test:kinematic": "node --test test/kinematic/*.test.js test/tools/*.test.js",
     "test:path-tracing": "node --test test/path-tracing/*.test.js"
   },
   "author": "wwjll",

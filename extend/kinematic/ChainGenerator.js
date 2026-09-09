@@ -148,7 +148,7 @@ function createChainFromDHParameters(dhParameters, mode = 'DH') {
 
         const joint = new Joint({ minAngle, maxAngle });
         if (i === 0) joint.isRoot = true;
-        joint.applyJointDH(thetaValue, d, a, alpha);
+        joint.applyJointDH(thetaValue, d, a, alpha, thetaOffset);
 
         if (lastNode) lastNode.setChild(joint);
         lastNode = joint;

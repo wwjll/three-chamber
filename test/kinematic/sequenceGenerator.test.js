@@ -423,3 +423,82 @@ test('SequenceGenerator loads recorded keyframes with one sequence commit', () =
     assert.equal(generator.getKeyframes().length, 2);
     assert.equal(generator.getSelectedKeyframe().label, 'First');
 });
+
+
+test('SequenceGenerator validates imported joint poses against model limits', () => {
+    const statuses = [];
+    const generator = new SequenceGenerator({
+        targetObject: new Object3D(),
+        jointLimits: Array.from({ length: 6 }, () => ({ min: -1, max: 1 })),
+        getCurrentChainPose: () => [0, 0, 0, 0, 0, 0],
+        onStatus: (status) => statuses.push(status),
+    });
+    const options = { position: [0, 0, 0], rotation: [0, 0, 0] };
+    for (const chainPose of [
+        [0, 0, 1.01, 0, 0, 0],
+        [0, 0, -1.01, 0, 0, 0],
+        [0, 0, Infinity, 0, 0, 0],
+        [0, 0, 0],
+        new Array(6),
+        null,
+    ]) {
+        assert.equal(generator.addRecordedKeyframe({ ...options, chainPose }), null);
+    }
+    assert.equal(generator.getKeyframes().length, 0);
+    assert.ok(statuses.every((status) => status.includes('joint')));
+    const valid = generator.addRecordedKeyframe({
+        ...options,
+        chainPose: [-1, 1, 0, 0, 0, 0],
+    });
+    assert.ok(valid);
+    valid.chainPose[2] = 2;
+    assert.throws(() => generator.buildSequence(), RangeError);
+});
+
+test('SequenceGenerator compiled joints survive editor changes and deletion', () => {
+    const generator = new SequenceGenerator({ targetObject: new Object3D() });
+    const recorded = generator.addRecordedKeyframe({
+        position: [0.2, 0.3, 0.4],
+        rotation: [0, 0, 0],
+        chainPose: [0, 0.1, 0.2, 0.3, 0.4, 0.5],
+        durationMs: 500,
+    });
+    const sequence = generator.buildSequence();
+    recorded.chainPose[0] = 1;
+    recorded.durationMs = 900;
+    generator.deleteSelectedKeyframe();
+    const step = sequence.steps[0];
+    const resolved = [];
+    assert.equal(generator.resolveJointState(step.target, {}, resolved), true);
+    assert.deepEqual(resolved, [0, 0.1, 0.2, 0.3, 0.4, 0.5]);
+    assert.equal(step.durationMs, 500);
+    resolved[0] = 2;
+    const secondResolution = [];
+    assert.equal(generator.resolveJointState(step.target, {}, secondResolution), true);
+    assert.equal(secondResolution[0], 0);
+});
+
+test('SequenceGenerator does not replace an invalid explicit joint target with live data', () => {
+    const generator = new SequenceGenerator({
+        targetObject: new Object3D(),
+        getCurrentChainPose: () => [0, 0, 0, 0, 0, 0],
+    });
+    const recorded = generator.addRecordedKeyframe({
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+        chainPose: [0, 0, 0, 0, 0, 0],
+    });
+    const target = generator.buildSequence().steps[0].target;
+    assert.equal(target.keyframeId, recorded.id);
+    for (const chainPose of [null, [], new Array(6), [0, 0, NaN, 0, 0, 0]]) {
+        const output = [];
+        assert.equal(generator.resolveJointState({ ...target, chainPose }, {}, output), false);
+        assert.deepEqual(output, []);
+    }
+    assert.equal(generator.addRecordedKeyframe({
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+        chainPose: null,
+        joints: [0, 0, 0, 0, 0, 0],
+    }), null);
+});

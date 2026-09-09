@@ -269,3 +269,265 @@ test('SequencePlayer interpolates generated Euler channels with smooth timing', 
     );
     assert.ok(targetObject.quaternion.angleTo(halfwayQuaternion) < 1e-12);
 });
+
+
+test('SequencePlayer cancels pending IK before recorded joint playback and manual joints', () => {
+    let nowMs = 0;
+    let appliedJointState;
+    const targetObject = new Object3D();
+    const player = new SequencePlayer({
+        chain: { roboticArm: new Object3D(), joints: [], getActuator: () => null },
+        getTargetObject: () => targetObject,
+        getInitialQ: () => [0],
+        now: () => nowMs,
+        applyQToChain: (q) => { appliedJointState = q.slice(); },
+        sequence: { steps: [{ type: 'joint', target: { chainPose: [1] }, durationMs: 1000 }] },
+    });
+    player.queueSolveFromTarget();
+    assert.equal(player.hasPendingSolve(), true);
+    assert.equal(player.startSequence(), true);
+    nowMs = 500;
+    player.updateStageLerp();
+    player.solveIfPending();
+    assert.deepEqual(appliedJointState, [0.5]);
+    assert.equal(player.hasPendingSolve(), false);
+
+    player.queueSolveFromTarget();
+    assert.equal(player.setJointState([0.25]), true);
+    player.solveIfPending();
+    assert.deepEqual(appliedJointState, [0.25]);
+    assert.equal(player.hasPendingSolve(), false);
+});
+
+test('SequencePlayer rejects a recorded joint pose outside model limits', () => {
+    const errors = [];
+    const player = new SequencePlayer({
+        chain: { roboticArm: new Object3D(), joints: [{ minAngle: -90, maxAngle: 90 }], getActuator: () => null },
+        getTargetObject: () => new Object3D(),
+        getInitialQ: () => [0],
+        onError: (error) => errors.push(error),
+        sequence: { steps: [{ type: 'joint', target: { chainPose: [Math.PI] }, durationMs: 100 }] },
+    });
+    assert.equal(player.setJointState([Math.PI]), false);
+    assert.deepEqual(player.getJointState(), [0]);
+    assert.equal(player.startSequence(), false);
+    assert.equal(player.isActive(), false);
+    assert.equal(errors.length, 2);
+    assert.equal(errors[0].code, 'invalid-joint-state');
+    assert.equal(errors[1].code, 'invalid-joint-state');
+});
+
+function createStationarySolverPlayer({ rotationError = 0, ...options } = {}) {
+    const targetObject = new Object3D();
+    const orientation = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), rotationError);
+    return new SequencePlayer({
+        chain: {
+            roboticArm: new Object3D(),
+            joints: [],
+            getActuator: () => null,
+            getActuatorWorldPosition: (out) => out.set(0, 0, 0),
+            getActuatorWorldQuaternion: (out) => out.copy(orientation),
+        },
+        getTargetObject: () => targetObject,
+        getInitialQ: () => [0],
+        solverMethod: 'DLS',
+        solveMode: 'Position + Rotation',
+        tolerance: 0.006,
+        rotationTolerance: 0.03,
+        ...options,
+    });
+}
+
+test('SequencePlayer accepts the same position and rotation tolerances as DLS', () => {
+    const player = createStationarySolverPlayer({ rotationError: 0.02 });
+    player.queueSolveFromTarget();
+    player.solveIfPending();
+    assert.equal(player.hasPendingSolve(), false);
+    assert.equal(player.getSolveMetrics().converged, true);
+    assert.ok(player.getSolveMetrics().rotationError > 0.006);
+});
+
+test('SequencePlayer stops a stalled manual target and reports a failure', () => {
+    let nowMs = 0;
+    const errors = [];
+    const player = createStationarySolverPlayer({
+        rotationError: Math.PI / 2,
+        now: () => nowMs,
+        solveStallTimeoutMs: 100,
+        onError: (error) => errors.push(error),
+    });
+    player.queueSolveFromTarget();
+    player.solveIfPending();
+    assert.equal(player.hasPendingSolve(), true);
+    nowMs = 101;
+    player.solveIfPending();
+    assert.equal(player.hasPendingSolve(), false);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].code, 'solve-stalled');
+    assert.equal(player.getSolveMetrics().failed, true);
+    player.solveIfPending();
+    assert.equal(errors.length, 1);
+});
+
+test('SequencePlayer does not report a reached pose when orientation settling times out', () => {
+    let nowMs = 0;
+    let reached = 0;
+    let completed = 0;
+    const errors = [];
+    const player = createStationarySolverPlayer({
+        rotationError: Math.PI / 2,
+        now: () => nowMs,
+        moveSettleTimeoutMs: 100,
+        solveStallTimeoutMs: 1000,
+        onPoseReached: () => { reached++; },
+        onComplete: () => { completed++; },
+        onError: (error) => errors.push(error),
+        resolveTarget: (_spec, _context, position, quaternion) => {
+            position.set(0, 0, 0);
+            quaternion.identity();
+            return true;
+        },
+        sequence: { steps: [{ type: 'move', target: {}, durationMs: 1, completion: 'solve' }] },
+    });
+    assert.equal(player.startSequence(), true);
+    nowMs = 1;
+    player.updateStageLerp();
+    player.solveIfPending();
+    assert.equal(player.isActive(), true);
+    nowMs = 102;
+    player.solveIfPending();
+    assert.equal(player.isActive(), false);
+    assert.equal(player.hasPendingSolve(), false);
+    assert.equal(reached, 0);
+    assert.equal(completed, 0);
+    assert.equal(errors[0].code, 'solve-timeout');
+});
+
+test('SequencePlayer measures opening with the custom jaw gap in both frames', () => {
+    let gap = 0.025;
+    const actuator = { getJawInnerGap: () => 0.001 };
+    const player = new SequencePlayer({
+        chain: { getActuator: () => actuator },
+        getJawInnerGap: () => gap,
+        isCubeValid: () => true,
+    });
+    let released = 0;
+    player._graspJoint = {};
+    player._graspedCube = { size: 0.02 };
+    player.releaseGraspJoint = () => { released++; };
+    player.afterPhysicsStep();
+    player.afterPhysicsStep();
+    assert.equal(released, 0);
+    gap = 0.03;
+    player.afterPhysicsStep();
+    assert.equal(released, 1);
+});
+
+
+test('SequencePlayer rejects sparse manual joints and clears motion before reporting failure', () => {
+    let errorCount = 0;
+    let appliedCount = 0;
+    let nowMs = 0;
+    const player = new SequencePlayer({
+        getTargetObject: () => new Object3D(),
+        getInitialQ: () => [0, 0],
+        now: () => nowMs,
+        applyQToChain: () => { appliedCount++; },
+        sequence: {
+            steps: [{ id: 'moving', type: 'joint', target: { chainPose: [1, 1] }, durationMs: 100 }],
+        },
+        onError: (error) => {
+            errorCount++;
+            assert.equal(error.code, 'invalid-joint-state');
+            assert.equal(error.stepId, 'moving');
+            assert.equal(player.isActive(), false);
+            assert.equal(player.isLerping(), false);
+            assert.equal(player.hasPendingSolve(), false);
+            player.reset();
+        },
+    });
+    assert.equal(player.startSequence(), true);
+    assert.equal(player.setJointState(new Array(2)), false);
+    assert.deepEqual(player.getJointState(), [0, 0]);
+    nowMs = 200;
+    assert.equal(player.updateStageLerp(), false);
+    player.solveIfPending();
+    player.afterPhysicsStep();
+    assert.equal(appliedCount, 0);
+    assert.equal(errorCount, 1);
+});
+
+test('SequencePlayer does not resolve a replacement for an invalid explicit joint snapshot', () => {
+    let resolverCalls = 0;
+    const errors = [];
+    const player = new SequencePlayer({
+        getTargetObject: () => new Object3D(),
+        getInitialQ: () => [0],
+        resolveJointState: (_target, _context, out) => {
+            resolverCalls++;
+            out.push(1);
+            return true;
+        },
+        onError: (error) => errors.push(error),
+    });
+    for (const chainPose of [null, new Array(1), [NaN], []]) {
+        player.loadSequence({ steps: [{
+            type: 'joint',
+            target: { chainPose },
+            pose: { chainPose: [1] },
+            durationMs: 100,
+        }] });
+        assert.equal(player.startSequence(), false);
+        assert.equal(player.isActive(), false);
+        assert.deepEqual(player.getJointState(), [0]);
+    }
+    assert.equal(resolverCalls, 0);
+    assert.equal(errors.length, 4);
+});
+
+test('SequencePlayer direct joint edits stop playback before it can overwrite them', () => {
+    let nowMs = 0;
+    const player = new SequencePlayer({
+        getTargetObject: () => new Object3D(),
+        getInitialQ: () => [0],
+        now: () => nowMs,
+        sequence: {
+            steps: [{ type: 'joint', target: { chainPose: [1] }, durationMs: 100 }],
+        },
+    });
+    assert.equal(player.startSequence(), true);
+    nowMs = 50;
+    player.updateStageLerp();
+    assert.deepEqual(player.getJointState(), [0.5]);
+    assert.equal(player.setJointState([0.25]), true);
+    assert.equal(player.isActive(), false);
+    nowMs = 100;
+    assert.equal(player.updateStageLerp(), false);
+    player.solveIfPending();
+    assert.deepEqual(player.getJointState(), [0.25]);
+});
+
+
+test('SequencePlayer ignores IK requests while a joint trajectory owns the pose', () => {
+    let nowMs = 0;
+    const targetObject = new Object3D();
+    const player = createStationarySolverPlayer({
+        getTargetObject: () => targetObject,
+        now: () => nowMs,
+        sequence: {
+            steps: [{ type: 'joint', target: { chainPose: [1] }, durationMs: 100 }],
+        },
+    });
+    assert.equal(player.startSequence(), true);
+    targetObject.position.set(1, 0, 0);
+    player.queueSolveFromTarget();
+    assert.equal(player.hasPendingSolve(), false);
+    nowMs = 50;
+    player.updateStageLerp();
+    player.solveIfPending();
+    assert.deepEqual(player.getJointState(), [0.5]);
+    assert.equal(player.getSolveRevision(), 0);
+    player.clear();
+    player.queueSolveFromTarget();
+    assert.equal(player.hasPendingSolve(), true);
+});

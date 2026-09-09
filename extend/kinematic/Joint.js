@@ -9,8 +9,6 @@ import { DOFHelper } from './DOFHelper.js';
 
 const DEFAULT_JOINT_AXIS = new Vector3(0, 0, 1);
 const _worldQuat = new Quaternion();
-const _localQuat = new Quaternion();
-const _localRot = new Matrix4();
 
 class Joint extends Object3D {
 
@@ -36,7 +34,7 @@ class Joint extends Object3D {
         if (maxAngle !== undefined) this.maxAngle = maxAngle;
     }
 
-    applyJointDH(theta, d, a, alpha) {
+    applyJointDH(theta, d, a, alpha, thetaOffset = 0) {
         // Standard DH decomposition:
         // full transform is Rz(theta) * Tz(d) * Tx(a) * Rx(alpha),
         // while this joint node applies only Rz(theta) about local Z.
@@ -44,7 +42,7 @@ class Joint extends Object3D {
         const m = new Matrix4().makeRotationZ(theta);
         this.matrix.copy(m);
 
-        this.dh = { theta, d, a, alpha };
+        this.dh = { theta, d, a, alpha, thetaOffset };
         this.mode = 'DH';
     }
 

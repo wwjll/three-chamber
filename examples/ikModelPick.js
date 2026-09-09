@@ -40,7 +40,6 @@ import {
     createDhParametersFromJointState,
     ur3eChainProfile,
 } from '../extend/kinematic/ChainController.js';
-import ChainSolver from '../extend/kinematic/ChainSolver.js';
 import { SequencePlayer } from '../extend/kinematic/SequencePlayer.js';
 import {
     CLOSE_ACTION,
@@ -50,10 +49,11 @@ import {
 } from '../extend/kinematic/SequenceGenerator.js';
 import { IndexedDbSequenceStore } from '../extend/kinematic/SequenceStore.js';
 import { createUr3eRobotiqRig } from '../extend/kinematic/Ur3eRobotiqRig.js';
+import { SimulationClock } from '../extend/tools/SimulationClock.js';
 import { getAssetURL, getRenderLoopController } from '../extend/tools/Tool.js';
 
 let scene, camera, renderer, controls;
-let chain, actuator, chainSolver, robotRig, sequencePlayer, sequenceGenerator;
+let chain, actuator, robotRig, sequencePlayer, sequenceGenerator;
 let sequenceTarget;
 let qCurrent = [];
 let placedCount = 0;
@@ -88,10 +88,9 @@ const DEFAULT_Q_SEED = [0, -78, 102, -114, -90, 0].map(MathUtils.degToRad);
 const UR3E_MODEL_URL = `${getAssetURL()}models/ur3e/visual/`;
 const GRIPPER_MODEL_URL = `${getAssetURL()}models/robotiq-2f-85/visual/`;
 const renderLoop = getRenderLoopController();
+const simulationClock = new SimulationClock();
 const pickRaycaster = new Raycaster();
 const pickPointer = new Vector2();
-const pendingTarget = new Vector3();
-const pendingTargetQuaternion = new Quaternion();
 const colliderReferenceInverse = new Matrix4();
 const colliderWorldMatrix = new Matrix4();
 const colliderLocalMatrix = new Matrix4();
@@ -320,6 +319,13 @@ async function init() {
 
     renderer.domElement.addEventListener('click', onSceneClick);
     window.addEventListener('resize', scheduleResize);
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            renderLoop.stop();
+        } else {
+            renderLoop.requestRender();
+        }
+    });
     window.visualViewport?.addEventListener('resize', scheduleResize);
 
     renderLoop.configure({
@@ -343,6 +349,7 @@ async function init() {
 async function initPhysics() {
     await initRapier();
     physicsWorld = new World({ x: 0, y: -9.81, z: 0 });
+    physicsWorld.timestep = simulationClock.stepSeconds;
 }
 
 function addEnvironment() {
@@ -712,26 +719,6 @@ function createKinematicChain() {
     chain.attachActuator(actuator, { preserveWorld: false });
     chain.roboticArm.visible = false;
 
-    chainSolver = new ChainSolver({
-        targetPosition: pendingTarget,
-        targetQuaternion: pendingTargetQuaternion,
-        chain,
-        maxIter: solverParams.maxIter,
-        alpha: solverParams.alpha,
-        tolerance: solverParams.tolerance,
-        solveMode: getSolverMode(),
-        solverMethod: solverParams.solverMethod,
-        damping: solverParams.damping,
-        dlsMaxDelta: solverParams.dlsMaxDelta,
-        rotationWeight: solverParams.rotationWeight,
-        rotationTolerance: solverParams.rotationTolerance,
-        debug: solverParams.debug,
-        forwardKinematics: (q) => {
-            chain.updateJoint(q);
-            syncRobotPose(q);
-        },
-    });
-    chainSolver.joints = chain.joints;
 }
 
 function createRobotRig() {
@@ -764,7 +751,7 @@ function createSequencePlayer() {
         getTargetObject: () => sequenceTarget,
         chain,
         requestRender: () => renderLoop.requestRender(),
-        now: () => performance.now(),
+        now: () => simulationClock.time * 1000,
         getPickParams: () => moveParams,
         getPhysicsWorld: () => physicsWorld,
         getPhysicsCubes: () => cubes,
@@ -800,6 +787,12 @@ function createSequencePlayer() {
         onStepEnter: updateSequenceStatus,
         onPoseReached: selectReachedSequenceKeyframe,
         onComplete: completePickSequence,
+        onError: (error) => {
+            sequenceGenerator?.setPlaybackActive(false);
+            syncSequenceEditorFromGrip();
+            setStatus(error.message);
+            renderLoop.requestRender();
+        },
         forwardKinematics: (q) => {
             chain.updateJoint(q);
         },
@@ -847,6 +840,10 @@ function createSequenceGenerator(initialKeyframes) {
         targetObject: sequenceTarget,
         sequencePlayer,
         requestRender: () => renderLoop.requestRender(),
+        jointLimits: ur3eChainProfile.segments.map((joint) => ({
+            min: MathUtils.degToRad(joint.minAngle),
+            max: MathUtils.degToRad(joint.maxAngle),
+        })),
         defaultDurationMs: 500,
         defaultGripDurationMs: moveParams.gripDurationMs,
         getCurrentPose: (outPosition, outQuaternion) => {
@@ -1053,17 +1050,6 @@ function createSolverControls() {
 
 function applySolverParams() {
     const solveMode = getSolverMode();
-    if (chainSolver) {
-        chainSolver.solverMethod = solverParams.solverMethod;
-        chainSolver.maxIter = solverParams.maxIter;
-        chainSolver.alpha = solverParams.alpha;
-        chainSolver.tolerance = solverParams.tolerance;
-        chainSolver.damping = solverParams.damping;
-        chainSolver.dlsMaxDelta = solverParams.dlsMaxDelta;
-        chainSolver.rotationWeight = solverParams.rotationWeight;
-        chainSolver.rotationTolerance = solverParams.rotationTolerance;
-        chainSolver.solveMode = solveMode;
-    }
     sequencePlayer?.setSolverConfig({ ...solverParams, solveMode });
     if (!sequencePlayer?.isActive()) {
         sequencePlayer?.queueSolveFromTarget();
@@ -1282,6 +1268,10 @@ function createActuatorColliderDebug() {
 
 function syncActuatorColliderDebug() {
     if (!actuatorColliderDebug || !actuator) {
+        return;
+    }
+    actuatorColliderDebug.visible = debugParams.showActuatorColliders;
+    if (!actuatorColliderDebug.visible) {
         return;
     }
     actuator.toolGroup.updateWorldMatrix(true, false);
@@ -1723,11 +1713,13 @@ function hasAwakePhysicsBodies() {
     ));
 }
 
-function renderFrame() {
-    sequencePlayer?.updateStageLerp();
-    solveIfPending();
+function renderFrame(deltaSeconds) {
+    simulationClock.advance(deltaSeconds, () => {
+        sequencePlayer?.updateStageLerp();
+        solveIfPending();
+        stepPhysics();
+    });
     updateSolverUI();
-    stepPhysics();
     syncActuatorColliderDebug();
     const controlsChanged = controls.update();
     renderer.render(scene, camera);

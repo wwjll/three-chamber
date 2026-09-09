@@ -178,6 +178,8 @@ class SequencePlayer {
             0,
             options.moveSettleTimeoutMs ?? Infinity,
         );
+        this.manualSolveTimeoutMs = options.manualSolveTimeoutMs ?? 2000;
+        this.solveStallTimeoutMs = options.solveStallTimeoutMs ?? 500;
         this.resolveSequenceTarget = options.resolveTarget ?? null;
         this.resolveSequenceJointState = options.resolveJointState ?? null;
         this.getJawInnerGap = options.getJawInnerGap ?? null;
@@ -185,6 +187,7 @@ class SequencePlayer {
         this.onStepEnter = options.onStepEnter ?? (() => {});
         this.onPoseReached = options.onPoseReached ?? (() => {});
         this.onComplete = options.onComplete ?? (() => {});
+        this.onError = options.onError ?? (() => {});
 
         this._solver = new ChainSolver({
             targetPosition: new Vector3(),
@@ -214,6 +217,9 @@ class SequencePlayer {
         this._solveActive = false;
         this._solveRevision = 0;
         this._lastSolveMetrics = null;
+        this._solveStartedMs = null;
+        this._lastSolveImprovementMs = null;
+        this._bestSolveError = Infinity;
         this._pendingTarget = new Vector3();
         this._pendingTargetQuat = new Quaternion();
 
@@ -242,6 +248,36 @@ class SequencePlayer {
         this._pickSequence = null;
         this._stepRuntime = null;
         this._stageLerp = null;
+        this._cancelSolve();
+    }
+
+    _cancelSolve() {
+        this._pendingSolve = false;
+        this._solveActive = false;
+        this._solveStartedMs = null;
+        this._lastSolveImprovementMs = null;
+        this._bestSolveError = Infinity;
+    }
+
+    _fail(code, message) {
+        const cubeItem = this._pickSequence?.cube ?? null;
+        const context = this._pickSequence?.context ?? {};
+        const stepId = this._currentStep()?.id ?? null;
+        this.clear();
+        if (this._lastSolveMetrics) {
+            this._lastSolveMetrics = {
+                ...this._lastSolveMetrics,
+                status: 'failed',
+                failed: true,
+                failureReason: code,
+                converged: false,
+            };
+        }
+        this.onError({
+            code, message, stepId, metrics: this.getSolveMetrics(),
+        }, cubeItem, context);
+        this.requestRender();
+        return false;
     }
 
     reset() {
@@ -299,9 +335,34 @@ class SequencePlayer {
     }
 
     setJointState(q, options = {}) {
+        if (!this._isJointStateValid(q)) {
+            return this._fail('invalid-joint-state', 'Joint state is non-finite or outside the joint limits.');
+        }
+        // A direct joint edit takes control from both IK and sequence playback.
+        this.clear();
         this._qCurrent = q.slice();
         this.applyQToChain(this._qCurrent, options);
         this.syncSolverJoints();
+        return true;
+    }
+
+    _isJointStateValid(q) {
+        const expectedCount = this.chain?.joints?.length || this._qCurrent.length;
+        if (
+            !Array.isArray(q)
+            || (expectedCount > 0 && q.length !== expectedCount)
+        ) {
+            return false;
+        }
+        const limits = this._solver.buildJointLimits(q.length);
+        for (let index = 0; index < q.length; index++) {
+            const value = q[index];
+            if (!Number.isFinite(value)
+                || Math.abs(this._solver.clampJointValue(value, limits[index]) - value) >= 1e-9) {
+                return false;
+            }
+        }
+        return true;
     }
 
     syncSolverJoints() {
@@ -340,62 +401,84 @@ class SequencePlayer {
     }
 
     queueSolveFromTarget() {
-        if (!this.chain?.roboticArm) return;
+        // Joint playback owns the pose until it finishes or is explicitly stopped.
+        if (this._stageLerp?.kind === 'joint' || !this.chain?.roboticArm) return;
+        _tmpTargetPos.copy(this._pendingTarget);
+        _tmpTargetQuat.copy(this._pendingTargetQuat);
         this._syncPendingTargetFromControl();
+        if (
+            this._solveStartedMs === null
+            || !this._pendingTarget.equals(_tmpTargetPos)
+            || !this._pendingTargetQuat.equals(_tmpTargetQuat)
+        ) {
+            this._solveStartedMs = this.now();
+            this._lastSolveImprovementMs = this._solveStartedMs;
+            this._bestSolveError = Infinity;
+        }
         this._pendingSolve = true;
         this._solveActive = true;
         this.requestRender();
     }
 
     solveIfPending({
-        targetTolerance,
-        pickStagePositionTolerance,
-        descendStageTolerance,
-        descendTimeoutMs,
-    }) {
+        targetTolerance = this._solver.tolerance,
+        pickStagePositionTolerance = targetTolerance,
+        descendStageTolerance = targetTolerance,
+        descendTimeoutMs = this.moveSettleTimeoutMs,
+    } = {}) {
         if ((!this._pendingSolve && !this._solveActive) || this._isSolving || !this.chain?.roboticArm) return;
         this._pendingSolve = false;
-
+        this._solveActive = false;
         this._solver.targetPosition.copy(this._pendingTarget);
         this._solver.targetQuaternion.copy(this._pendingTargetQuat);
         this._isSolving = true;
+        let result;
         try {
-            this._qCurrent = this._solver.solve(this._qCurrent);
+            const nextJointState = this._solver.solve(this._qCurrent);
+            result = this._solver.getSolveResult();
+            if (result.finite) {
+                this._qCurrent = nextJointState;
+            }
             this.applyQToChain(this._qCurrent, { syncToolEuler: false, syncReachRange: false });
             this._solveRevision += 1;
         } finally {
             this._isSolving = false;
         }
 
-        const taskError = this._solver.computeTaskError(this._qCurrent);
-        const remainingPosError = taskError.posErr.length();
-        const remainingRotationError = taskError.rotErr.length();
-        const remainingError = this._solver.isPositionAndRotationMode()
-            ? Math.hypot(remainingPosError, remainingRotationError)
-            : remainingPosError;
-        const { converged } = this.evaluateSolveResult({
-            remainingError,
-            remainingPosError,
+        this._lastSolveMetrics = {
+            solverMethod: this._solver.solverMethod,
+            positionError: result.positionError,
+            rotationError: result.rotationError,
+            taskError: result.errorNorm,
+            iterations: result.iterations,
+            converged: result.converged,
+            revision: this._solveRevision,
+            status: result.converged ? 'converged' : 'solving',
+            failed: false,
+        };
+        if (!result.finite || result.status === 'numerical-failure') {
+            this._fail('numerical-failure', 'IK produced a non-finite result.');
+            return;
+        }
+        const { converged, failed } = this.evaluateSolveResult({
+            remainingPosError: result.positionError,
+            remainingRotationError: result.rotationError,
             targetTolerance,
             pickStagePositionTolerance,
             descendStageTolerance,
             descendTimeoutMs,
         });
-        this._lastSolveMetrics = {
-            solverMethod: this._solver.solverMethod,
-            positionError: remainingPosError,
-            rotationError: remainingRotationError,
-            taskError: remainingError,
-            iterations: this._solver.lastIterationCount,
-            converged,
-            revision: this._solveRevision,
-        };
-
+        if (failed) {
+            return;
+        }
+        this._lastSolveMetrics.converged = converged;
+        this._lastSolveMetrics.status = converged ? 'converged' : 'solving';
         if (!converged) {
             this._solveActive = true;
             this._pendingSolve = true;
-        } else {
-            this._solveActive = false;
+            this.requestRender();
+        } else if (!this.hasPendingSolve()) {
+            this._cancelSolve();
         }
     }
 
@@ -455,7 +538,7 @@ class SequencePlayer {
             this.releaseGraspJoint();
         }
         this._updateGripStep(actuator);
-        this._prevJawInnerGap = actuator ? actuator.getJawInnerGap() : null;
+        this._prevJawInnerGap = actuator ? this._getJawInnerGap(actuator) : null;
     }
 
     startPickSequence(cubeItem, context = {}) {
@@ -566,45 +649,68 @@ class SequencePlayer {
     }
 
     evaluateSolveResult({
-        remainingError,
         remainingPosError,
-        targetTolerance,
-        pickStagePositionTolerance,
-        descendStageTolerance,
-        descendTimeoutMs,
+        remainingRotationError = 0,
+        targetTolerance = this._solver.tolerance,
+        pickStagePositionTolerance = targetTolerance,
+        descendStageTolerance = targetTolerance,
+        descendTimeoutMs = this.moveSettleTimeoutMs,
     }) {
         const step = this._currentStep();
         const awaitingMoveConvergence = step?.type === 'move'
             && this._stepRuntime?.awaitingConvergence;
-        const useDescendProfile = awaitingMoveConvergence && step?.toleranceProfile === 'descend';
-        const descendContactReady = useDescendProfile
-            && this._pickSequence?.cube
-            && this._pickJawContactCandidate([this._pickSequence.cube]) !== null;
-        const descendTimedOut = useDescendProfile
-            && this._stepRuntime?.startedMs !== undefined
-            && (this.now() - this._stepRuntime.startedMs) >= descendTimeoutMs;
-        const moveTimedOut = awaitingMoveConvergence
-            && this._stepRuntime?.startedMs !== undefined
-            && (this.now() - this._stepRuntime.startedMs) >= this.moveSettleTimeoutMs;
-        const stagePosTolerance = useDescendProfile
-            ? Math.min(targetTolerance, descendStageTolerance)
-            : Math.max(targetTolerance, pickStagePositionTolerance);
-        const converged = awaitingMoveConvergence
-            ? (
-                remainingPosError <= stagePosTolerance
-                || descendContactReady
-                || descendTimedOut
-                || moveTimedOut
-            )
-            : remainingError <= targetTolerance;
-
-        if (converged && awaitingMoveConvergence) {
-            this._stepRuntime = null;
-            this._notifyPoseReached(step);
-            this._advanceStep();
+        const useDescendProfile = awaitingMoveConvergence && step.toleranceProfile === 'descend';
+        const positionTolerance = awaitingMoveConvergence
+            ? (useDescendProfile
+                ? Math.min(targetTolerance, descendStageTolerance)
+                : Math.max(targetTolerance, pickStagePositionTolerance))
+            : targetTolerance;
+        const converged = this._solver.isTaskConverged(
+            remainingPosError,
+            remainingRotationError,
+            { positionTolerance },
+        );
+        if (converged) {
+            this._cancelSolve();
+            if (awaitingMoveConvergence) {
+                this._stepRuntime = null;
+                this._notifyPoseReached(step);
+                this._advanceStep();
+            }
+            return { converged: true, failed: this._lastSolveMetrics?.failed === true };
         }
 
-        return { converged };
+        const nowMs = this.now();
+        const error = Math.max(
+            remainingPosError / positionTolerance,
+            this._solver.isPositionAndRotationMode()
+                ? remainingRotationError / this._solver.rotationTolerance
+                : 0,
+        );
+        if (error < this._bestSolveError - 1e-4) {
+            this._bestSolveError = error;
+            this._lastSolveImprovementMs = nowMs;
+        }
+        // Moving targets have their own trajectory clock. Budgets apply once
+        // settling starts, or while a stationary manual target is being solved.
+        const moving = this._stageLerp !== null;
+        const startedMs = awaitingMoveConvergence
+            ? this._stepRuntime.startedMs
+            : this._solveStartedMs;
+        const timeoutMs = awaitingMoveConvergence
+            ? Math.min(this.moveSettleTimeoutMs, useDescendProfile ? descendTimeoutMs : Infinity)
+            : this.manualSolveTimeoutMs;
+        const timedOut = !moving && startedMs !== null && nowMs - startedMs >= timeoutMs;
+        const stalled = !moving && this._lastSolveImprovementMs !== null
+            && nowMs - this._lastSolveImprovementMs >= this.solveStallTimeoutMs;
+        if (timedOut || stalled) {
+            this._fail(
+                timedOut ? 'solve-timeout' : 'solve-stalled',
+                timedOut ? 'IK did not reach the target before the deadline.' : 'IK stopped making progress toward the target.',
+            );
+            return { converged: false, failed: true };
+        }
+        return { converged: false, failed: false };
     }
 
     _currentStep() {
@@ -642,8 +748,7 @@ class SequencePlayer {
             && !this.isCubeValid(this._pickSequence?.cube)
         ) {
             this.releaseGraspJoint();
-            this.clear();
-            return false;
+            return this._fail('invalid-target', 'The selected object is no longer available.');
         }
         if (
             step.when
@@ -677,14 +782,12 @@ class SequencePlayer {
             return this._enterJointStep(step);
         }
 
-        this.clear();
-        return false;
+        return this._fail('unsupported-step', `Unsupported sequence step: ${step.type}.`);
     }
 
     _enterMoveStep(step) {
         if (!this._resolveTarget(step.target, _tmpTargetPos, _tmpTargetQuat)) {
-            this.clear();
-            return false;
+            return this._fail('unresolved-target', 'The Cartesian waypoint could not be resolved.');
         }
         this._stepRuntime = {
             kind: 'move',
@@ -706,8 +809,7 @@ class SequencePlayer {
     _enterGripStep(step) {
         const actuator = this._getActuator();
         if (!actuator) {
-            this.clear();
-            return false;
+            return this._fail('missing-actuator', 'A gripper action requires an actuator.');
         }
         const timed = step.durationMs !== undefined
             || step.durationParam !== undefined;
@@ -733,35 +835,37 @@ class SequencePlayer {
             return true;
         }
 
-        this.clear();
-        return false;
+        return this._fail('unsupported-grip-action', `Unsupported gripper action: ${step.mode}.`);
     }
 
     _enterJointStep(step) {
-        if (!this.resolveSequenceJointState) {
-            this.clear();
-            return false;
-        }
+        this._cancelSolve();
         const fromJointState = this.getJointState();
         const toJointState = [];
-        const resolved = this.resolveSequenceJointState(
-            step.target ?? step.pose,
-            {
-                cubeItem: this._pickSequence?.cube ?? null,
-                sequenceContext: this._pickSequence?.context ?? {},
-                currentJointState: fromJointState.slice(),
-                step,
-                player: this,
-            },
-            toJointState,
-        );
-        if (
-            resolved !== true
-            || toJointState.length !== fromJointState.length
-            || toJointState.some((value) => !Number.isFinite(value))
-        ) {
-            this.clear();
-            return false;
+        const storedJointState = step.target?.chainPose !== undefined
+            ? step.target.chainPose
+            : step.pose?.chainPose;
+        let resolved;
+        if (storedJointState !== undefined) {
+            resolved = Array.isArray(storedJointState);
+            if (resolved) {
+                toJointState.push(...storedJointState);
+            }
+        } else {
+            resolved = this.resolveSequenceJointState?.(
+                step.target ?? step.pose,
+                {
+                    cubeItem: this._pickSequence?.cube ?? null,
+                    sequenceContext: this._pickSequence?.context ?? {},
+                    currentJointState: fromJointState.slice(),
+                    step,
+                    player: this,
+                },
+                toJointState,
+            );
+        }
+        if (resolved !== true || !this._isJointStateValid(toJointState)) {
+            return this._fail('invalid-joint-state', 'The joint waypoint could not be resolved or violates the joint limits.');
         }
         this._stageLerp = {
             kind: 'joint',
@@ -872,7 +976,7 @@ class SequencePlayer {
         const cubeItem = this._pickSequence?.cube;
         if (!this.isCubeValid(cubeItem) || !cubeItem?.body || !cubeItem?.collider) {
             this.releaseGraspJoint();
-            this.clear();
+            this._fail('invalid-target', 'The selected object is no longer available.');
             return;
         }
 
@@ -891,8 +995,7 @@ class SequencePlayer {
         const runtime = this._stepRuntime;
         const openRatio = actuator.getOpenRatio();
         if (openRatio <= 0) {
-            this.clear();
-            this.requestRender();
+            this._fail('grasp-failed', 'The gripper closed without establishing a grasp.');
             return;
         }
 
