@@ -42,7 +42,6 @@ import {
 } from '../extend/kinematic/ChainController.js';
 import { SequencePlayer } from '../extend/kinematic/SequencePlayer.js';
 import {
-    CLOSE_ACTION,
     HOLD_ACTION,
     OPEN_ACTION,
     SequenceGenerator,
@@ -51,6 +50,11 @@ import { IndexedDbSequenceStore } from '../extend/kinematic/SequenceStore.js';
 import { createUr3eRobotiqRig } from '../extend/kinematic/Ur3eRobotiqRig.js';
 import { SimulationClock } from '../extend/tools/SimulationClock.js';
 import { getAssetURL, getRenderLoopController } from '../extend/tools/Tool.js';
+import {
+    createPickAndReturnSequence,
+    createTrajectoryPreviewSequence,
+    DYNAMIC_CUBE_TARGET_KIND,
+} from './ikModelPickSequence.js';
 
 let scene, camera, renderer, controls;
 let chain, actuator, robotRig, sequencePlayer, sequenceGenerator;
@@ -153,7 +157,6 @@ const moveParams = {
     gripDurationMs: 450,
 };
 
-const DYNAMIC_CUBE_TARGET_KIND = 'ikModelPickCubeTarget';
 const PLAYBACK_MODE_PREVIEW = 'trajectoryPreview';
 const PLAYBACK_MODE_PICK = 'pickAndReturn';
 
@@ -1389,6 +1392,10 @@ function syncGripperFromActuator() {
 }
 
 function updateSequenceStatus(step) {
+    if (step?.approachStep) {
+        setStatus(`Moving to pick start via ${step.keyframeLabel}`);
+        return;
+    }
     if (step?.dynamicCubeTarget) {
         setStatus('Solving selected cube target');
         return;
@@ -1490,75 +1497,6 @@ function createPickContext(cubeItem) {
     };
 }
 
-function cloneSequenceStep(step) {
-    return {
-        ...step,
-        target: step.target ? { ...step.target } : undefined,
-    };
-}
-
-function createTrajectoryPreviewSequence(sequence) {
-    return {
-        ...sequence,
-        name: `${sequence.name}-preview`,
-        steps: sequence.steps
-            .filter((step) => step.type !== 'grip')
-            .map(cloneSequenceStep),
-    };
-}
-
-function createPickAndReturnSequence(sequence) {
-    const forwardSteps = sequence.steps.map(cloneSequenceStep);
-    const recordedPoseSteps = forwardSteps.filter(
-        (step) => (
-            step.keyframeId
-            && step.keyframeKind === 'recorded'
-            && (step.type === 'move' || step.type === 'joint')
-        ),
-    );
-    const returnSteps = recordedPoseSteps
-        .slice(0, -1)
-        .reverse()
-        .map((step) => ({
-            ...cloneSequenceStep(step),
-            id: `return-${step.id}`,
-            returnStep: true,
-        }));
-    return {
-        ...sequence,
-        name: `${sequence.name}-pick-and-return`,
-        steps: [
-            {
-                id: 'dynamic-cube-target-pose',
-                type: 'move',
-                target: { kind: DYNAMIC_CUBE_TARGET_KIND },
-                durationMs: 500,
-                interpolation: 'smooth',
-                rotationInterpolation: 'eulerXYZ',
-                solveWhileLerping: true,
-                completion: 'solve',
-                toleranceProfile: 'descend',
-                dynamicCubeTarget: true,
-            },
-            {
-                id: 'dynamic-cube-target-hold',
-                type: 'wait',
-                durationMs: 80,
-                dynamicCubeTarget: true,
-            },
-            {
-                id: 'dynamic-cube-target-grip',
-                type: 'grip',
-                mode: CLOSE_ACTION,
-                durationMs: moveParams.gripDurationMs,
-                dynamicCubeTarget: true,
-            },
-            ...forwardSteps,
-            ...returnSteps,
-        ],
-    };
-}
-
 function startTrajectoryPreview(_context, sequence) {
     if (sequencePlayer?.isActive()) {
         return false;
@@ -1582,7 +1520,12 @@ function startPickAndReturn(context) {
     }
     const sequence = createPickAndReturnSequence(
         sequenceGenerator.buildSequence(),
+        { currentChainPose: sequencePlayer.getJointState(), gripDurationMs: moveParams.gripDurationMs },
     );
+    if (!sequence) {
+        setStatus('Record at least one joint keyframe before picking a cube.');
+        return false;
+    }
     syncSequenceTargetFromGrip();
     sequencePlayer.loadSequence(sequence);
     setStatus(`Picking ${cubeItem.mesh.name}`);

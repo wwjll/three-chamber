@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { ColliderDesc, init, RigidBodyDesc, World } from '@dimforge/rapier3d-compat';
 import { Euler, Object3D, Quaternion, Vector3 } from 'three';
 import { SequencePlayer } from '../../extend/kinematic/SequencePlayer.js';
 
@@ -530,4 +531,63 @@ test('SequencePlayer ignores IK requests while a joint trajectory owns the pose'
     player.clear();
     player.queueSolveFromTarget();
     assert.equal(player.hasPendingSolve(), true);
+});
+
+test('SequencePlayer releases a held cube before timed opening finishes and gravity resumes', async () => {
+    await init();
+    const world = new World({ x: 0, y: -9.81, z: 0 });
+    world.timestep = 1 / 60;
+    try {
+        let nowMs = 0;
+        let openRatio = 0;
+        const toolBody = world.createRigidBody(RigidBodyDesc.fixed());
+        const body = world.createRigidBody(RigidBodyDesc.dynamic().setTranslation(0, 1, 0));
+        const collider = world.createCollider(ColliderDesc.cuboid(0.025, 0.025, 0.025), body);
+        const originalGroups = collider.collisionGroups();
+        const cube = { body, collider, size: 0.05 };
+        const actuator = {
+            getPhysicsBody: () => toolBody,
+            getOpenRatio: () => openRatio,
+            setOpenRatio: (value) => { openRatio = value; },
+            // The model-derived gap must be used instead of this procedural gap.
+            getJawInnerGap: () => 0.001,
+        };
+        const player = new SequencePlayer({
+            chain: { joints: [], getActuator: () => actuator },
+            getTargetObject: () => new Object3D(),
+            getPhysicsWorld: () => world,
+            getJawInnerGap: () => 0.04 + openRatio * 0.04,
+            heldCubeInteractionGroups: 0x00020002,
+            isCubeValid: () => true,
+            now: () => nowMs,
+            sequence: { steps: [{ type: 'grip', mode: 'open', durationMs: 450 }] },
+        });
+        assert.equal(player._createGraspJointForCube(cube), true);
+        assert.equal(player.startPickSequence(cube), true);
+
+        for (let frame = 0; frame <= 11; frame++) {
+            nowMs = frame * 1000 / 60;
+            const gapBeforeStep = player.getJawInnerGap();
+            player.beforePhysicsStep();
+            world.step();
+            player.afterPhysicsStep();
+            if (gapBeforeStep < cube.size) {
+                assert.equal(player.hasGraspJoint(), true, 'Keep holding while the opening is too narrow.');
+            } else {
+                assert.equal(player.hasGraspJoint(), false, 'Release as the opening clears the cube.');
+            }
+        }
+        assert.ok(body.translation().y < 0.999, 'Gravity resumes before the opening animation ends.');
+        assert.equal(collider.collisionGroups(), originalGroups);
+        assert.equal(collider.solverGroups(), originalGroups);
+        assert.equal(player.isActive(), true);
+        assert.ok(openRatio < 1);
+
+        nowMs = 450;
+        player.afterPhysicsStep();
+        assert.equal(openRatio, 1);
+        assert.equal(player.isActive(), false);
+    } finally {
+        world.free();
+    }
 });

@@ -537,8 +537,9 @@ class SequencePlayer {
         if (this._graspJoint && !this.isCubeValid(this._graspedCube)) {
             this.releaseGraspJoint();
         }
-        this._updateGripStep(actuator);
+        // Preserve the gap before animation changes it so the next step detects opening.
         this._prevJawInnerGap = actuator ? this._getJawInnerGap(actuator) : null;
+        this._updateGripStep(actuator);
     }
 
     startPickSequence(cubeItem, context = {}) {
