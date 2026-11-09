@@ -13,9 +13,6 @@ const _tmpLocalAnchorA = new Vector3();
 const _tmpLocalAnchorB = new Vector3();
 const _tmpJointLocalRotB = new Quaternion();
 const _tmpGraspWorldPos = new Vector3();
-const _tmpPickPos = new Vector3();
-const _tmpContainerPos = new Vector3();
-const _tmpVerticalGraspQuat = new Quaternion();
 const _tmpFromEuler = new Euler();
 const _tmpToEuler = new Euler();
 const _tmpCurrentEuler = new Euler();
@@ -47,107 +44,6 @@ function worldToBodyLocalPoint(body, worldPoint, out) {
     copyBodyPose(body, _tmpWorldPosA, _tmpWorldQuatA);
     _tmpInvWorldQuat.copy(_tmpWorldQuatA).invert();
     return out.copy(worldPoint).sub(_tmpWorldPosA).applyQuaternion(_tmpInvWorldQuat);
-}
-
-function createSequenceResolver({
-    chain,
-    getPickParams,
-    getContainerDropPoint,
-}) {
-    const chainRef = chain ?? null;
-    const pickParamsGetter = getPickParams ?? (() => ({}));
-    const containerDropPointGetter = getContainerDropPoint
-        ?? ((out) => out.set(0, 0, 0));
-
-    function computePickTargetFromCube(cubeItem, hover, outPos, outQuat) {
-        if (!cubeItem?.mesh || !outPos || !outQuat) return false;
-        cubeItem.mesh.getWorldPosition(_tmpPickPos);
-        const pickParams = pickParamsGetter();
-        const cubeSize = cubeItem.size ?? pickParams.cubeSize;
-        const hoverOffset = hover ?? pickParams.graspHover;
-        const half = Math.max(0.001, cubeSize) * 0.5;
-        const actuator = chainRef?.getActuator?.() ?? null;
-
-        if (actuator) {
-            actuator.computeTopDownPickPose(_tmpPickPos, cubeSize, hoverOffset, outPos, outQuat);
-            return true;
-        }
-        outPos.set(_tmpPickPos.x, _tmpPickPos.y + half + Math.max(0, hoverOffset), _tmpPickPos.z);
-        outQuat.identity();
-        return true;
-    }
-
-    function setPickTargetToContainer(hover, outPos, outQuat) {
-        if (!outPos || !outQuat) return false;
-        const pickParams = pickParamsGetter();
-        const hoverOffset = hover ?? pickParams.graspHover;
-        containerDropPointGetter(_tmpContainerPos);
-        outPos.set(_tmpContainerPos.x, hoverOffset, _tmpContainerPos.z);
-
-        const actuator = chainRef?.getActuator?.() ?? null;
-        if (actuator) {
-            actuator.getVerticalGripQuaternion(_tmpVerticalGraspQuat);
-            outQuat.copy(_tmpVerticalGraspQuat);
-        } else {
-            outQuat.identity();
-        }
-        return true;
-    }
-
-    function getOpenStageHover(cubeItem) {
-        const pickParams = pickParamsGetter();
-        const cubeSize = cubeItem?.size ?? pickParams.cubeSize;
-        return Math.max(0, cubeSize * 1.5);
-    }
-
-    function getDescendStageHover(cubeItem) {
-        const pickParams = pickParamsGetter();
-        const cubeSize = cubeItem?.size ?? pickParams.cubeSize;
-        return -Math.min(Math.max(cubeSize * 0.9 + 0.012, 0.018), 0.05);
-    }
-
-    const targetResolvers = {
-        'cube.topDownPick': (context, targetSpec, outPos, outQuat) => {
-            const cubeItem = context?.cubeItem ?? null;
-            const hover = context?.hover;
-            return computePickTargetFromCube(cubeItem, hover, outPos, outQuat);
-        },
-        'container.dropTop': (context, targetSpec, outPos, outQuat) => {
-            const hover = context?.hover;
-            return setPickTargetToContainer(hover, outPos, outQuat);
-        },
-    };
-
-    const hoverResolvers = {
-        openStage: ({ cubeItem }) => getOpenStageHover(cubeItem),
-        descendStage: ({ cubeItem }) => getDescendStageHover(cubeItem),
-        graspHover: () => pickParamsGetter().graspHover,
-    };
-
-    function resolveTarget(targetSpec, context, outPos, outQuat) {
-        const kind = targetSpec?.kind ?? '';
-        const pose = targetSpec?.pose ?? '';
-        const resolver = targetResolvers[`${kind}.${pose}`];
-        return resolver?.(context, targetSpec, outPos, outQuat) === true;
-    }
-
-    function resolveHover(targetSpec, context) {
-        if (targetSpec?.hover !== undefined) return targetSpec.hover;
-        const hoverRef = targetSpec?.hoverRef ?? '';
-        const resolver = hoverResolvers[hoverRef];
-        if (resolver) {
-            const resolved = resolver(context, targetSpec);
-            if (resolved !== undefined) return resolved;
-        }
-        return pickParamsGetter().graspHover;
-    }
-
-    return {
-        resolveTarget,
-        resolveHover,
-        targetResolvers,
-        hoverResolvers,
-    };
 }
 
 class SequencePlayer {
@@ -194,7 +90,6 @@ class SequencePlayer {
             targetQuaternion: new Quaternion(),
             chain: this.chain,
             maxIter: options.maxIter ?? 20,
-            alpha: options.alpha ?? 0.05,
             tolerance: options.tolerance ?? 1e-3,
             solveMode: options.solveMode === 'Position + Rotation'
                 ? 'Position + Rotation'
@@ -229,12 +124,6 @@ class SequencePlayer {
         this._graspJoint = null;
         this._graspedCube = null;
         this._prevJawInnerGap = null;
-
-        this._sequenceResolver = createSequenceResolver({
-            chain: this.chain,
-            getPickParams: this.getPickParams,
-            getContainerDropPoint: options.getContainerDropPoint,
-        });
 
         this.loadSequence(options.sequence);
         this.syncSolverJoints();
@@ -368,11 +257,12 @@ class SequencePlayer {
     syncSolverJoints() {
         this._solver.chain = this.chain;
         this._solver.joints = this.chain?.joints ?? [];
+        // Track the gripper tool center point so grip targets reach IK unchanged.
+        this._solver.endEffector = this._getActuator()?.gripPoint ?? null;
     }
 
     setSolverConfig(config = {}) {
         if (config.maxIter !== undefined) this._solver.maxIter = config.maxIter;
-        if (config.alpha !== undefined) this._solver.alpha = config.alpha;
         if (config.tolerance !== undefined) {
             this._solver.tolerance = config.tolerance;
         }
@@ -420,12 +310,7 @@ class SequencePlayer {
         this.requestRender();
     }
 
-    solveIfPending({
-        targetTolerance = this._solver.tolerance,
-        pickStagePositionTolerance = targetTolerance,
-        descendStageTolerance = targetTolerance,
-        descendTimeoutMs = this.moveSettleTimeoutMs,
-    } = {}) {
+    solveIfPending() {
         if ((!this._pendingSolve && !this._solveActive) || this._isSolving || !this.chain?.roboticArm) return;
         this._pendingSolve = false;
         this._solveActive = false;
@@ -463,10 +348,6 @@ class SequencePlayer {
         const { converged, failed } = this.evaluateSolveResult({
             remainingPosError: result.positionError,
             remainingRotationError: result.rotationError,
-            targetTolerance,
-            pickStagePositionTolerance,
-            descendStageTolerance,
-            descendTimeoutMs,
         });
         if (failed) {
             return;
@@ -649,27 +530,13 @@ class SequencePlayer {
         return true;
     }
 
-    evaluateSolveResult({
-        remainingPosError,
-        remainingRotationError = 0,
-        targetTolerance = this._solver.tolerance,
-        pickStagePositionTolerance = targetTolerance,
-        descendStageTolerance = targetTolerance,
-        descendTimeoutMs = this.moveSettleTimeoutMs,
-    }) {
+    evaluateSolveResult({ remainingPosError, remainingRotationError = 0 }) {
         const step = this._currentStep();
         const awaitingMoveConvergence = step?.type === 'move'
             && this._stepRuntime?.awaitingConvergence;
-        const useDescendProfile = awaitingMoveConvergence && step.toleranceProfile === 'descend';
-        const positionTolerance = awaitingMoveConvergence
-            ? (useDescendProfile
-                ? Math.min(targetTolerance, descendStageTolerance)
-                : Math.max(targetTolerance, pickStagePositionTolerance))
-            : targetTolerance;
         const converged = this._solver.isTaskConverged(
             remainingPosError,
             remainingRotationError,
-            { positionTolerance },
         );
         if (converged) {
             this._cancelSolve();
@@ -683,7 +550,7 @@ class SequencePlayer {
 
         const nowMs = this.now();
         const error = Math.max(
-            remainingPosError / positionTolerance,
+            remainingPosError / this._solver.tolerance,
             this._solver.isPositionAndRotationMode()
                 ? remainingRotationError / this._solver.rotationTolerance
                 : 0,
@@ -699,7 +566,7 @@ class SequencePlayer {
             ? this._stepRuntime.startedMs
             : this._solveStartedMs;
         const timeoutMs = awaitingMoveConvergence
-            ? Math.min(this.moveSettleTimeoutMs, useDescendProfile ? descendTimeoutMs : Infinity)
+            ? this.moveSettleTimeoutMs
             : this.manualSolveTimeoutMs;
         const timedOut = !moving && startedMs !== null && nowMs - startedMs >= timeoutMs;
         const stalled = !moving && this._lastSolveImprovementMs !== null
@@ -924,32 +791,17 @@ class SequencePlayer {
 
     _resolveTarget(targetSpec, outPos, outQuat) {
         if (!targetSpec) return false;
-        const cubeItem = this._pickSequence?.cube ?? null;
-        const hover = this._resolveHover(targetSpec, cubeItem);
         const context = {
-            cubeItem,
-            hover,
+            cubeItem: this._pickSequence?.cube ?? null,
             sequenceContext: this._pickSequence?.context ?? {},
             player: this,
         };
-        if (
-            this.resolveSequenceTarget
-            && this.resolveSequenceTarget(targetSpec, context, outPos, outQuat) === true
-        ) {
-            return true;
-        }
-        return this._sequenceResolver?.resolveTarget?.(
+        return this.resolveSequenceTarget?.(
             targetSpec,
             context,
             outPos,
             outQuat,
         ) === true;
-    }
-
-    _resolveHover(targetSpec, cubeItem) {
-        if (targetSpec?.hover !== undefined) return targetSpec.hover;
-        const resolved = this._sequenceResolver?.resolveHover?.(targetSpec, { cubeItem });
-        return resolved ?? this.getPickParams().graspHover;
     }
 
     _updateGripStep(actuator = this._getActuator()) {
@@ -1119,20 +971,8 @@ class SequencePlayer {
     _syncPendingTargetFromControl() {
         const targetObject = this.getTargetObject();
         if (!targetObject) return;
-        targetObject.getWorldPosition(_tmpWorldPosA);
-        targetObject.getWorldQuaternion(_tmpWorldQuatA);
-        const actuator = this._getActuator();
-        if (actuator) {
-            actuator.computeEndTargetFromGripTarget(
-                _tmpWorldPosA,
-                _tmpWorldQuatA,
-                this._pendingTarget,
-                this._pendingTargetQuat
-            );
-            return;
-        }
-        this._pendingTarget.copy(_tmpWorldPosA);
-        this._pendingTargetQuat.copy(_tmpWorldQuatA);
+        targetObject.getWorldPosition(this._pendingTarget);
+        targetObject.getWorldQuaternion(this._pendingTargetQuat);
     }
 
     _syncTargetControlFromGrip() {
@@ -1153,7 +993,6 @@ class SequencePlayer {
 }
 
 export {
-    createSequenceResolver,
     SequencePlayer,
     SequencePlayer as default,
 };

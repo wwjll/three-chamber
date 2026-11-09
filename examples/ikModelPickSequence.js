@@ -72,7 +72,6 @@ export function createPickAndReturnSequence(sequence, { currentChainPose, gripDu
                 rotationInterpolation: 'eulerXYZ',
                 solveWhileLerping: true,
                 completion: 'solve',
-                toleranceProfile: 'descend',
                 dynamicCubeTarget: true,
             },
             {

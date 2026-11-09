@@ -101,7 +101,6 @@ const baseParams = {
 const solverParams = {
     solverMethod: 'DLS',
     maxIter: 20,
-    alpha: 0.05,
     tolerance: targetTolerance,
     damping: 0.04,
     dlsMaxDelta: 0.08,
@@ -197,7 +196,6 @@ function init() {
         targetQuaternion: new Quaternion(),
         chain,
         maxIter: solverParams.maxIter,
-        alpha: solverParams.alpha,
         tolerance: solverParams.tolerance,
         solveMode: solverParams.solveMode,
         solverMethod: solverParams.solverMethod,
@@ -298,11 +296,6 @@ function init() {
         .addBinding(solverParams, 'maxIter', { label: 'Max Iter', min: 1, max: 200, step: 1 })
         .on('change', (ev) => {
             if (chainSolver) { chainSolver.maxIter = ev.value; }
-        });
-    controlsFolder
-        .addBinding(solverParams, 'alpha', { label: 'Alpha', min: 0.001, max: 0.5, step: 0.001 })
-        .on('change', (ev) => {
-            if (chainSolver) { chainSolver.alpha = ev.value; }
         });
     controlsFolder
         .addBinding(solverParams, 'damping', { label: 'Damping', min: 1e-5, max: 1, step: 0.001 })

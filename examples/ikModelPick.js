@@ -60,7 +60,6 @@ let scene, camera, renderer, controls;
 let chain, actuator, robotRig, sequencePlayer, sequenceGenerator;
 let sequenceTarget;
 let qCurrent = [];
-let placedCount = 0;
 let physicsWorld = null;
 let actuatorColliderDebug = null;
 let gripPointDebug = null;
@@ -143,7 +142,6 @@ const baseParams = {
 const solverParams = {
     solverMethod: 'DLS',
     maxIter: 24,
-    alpha: 0.05,
     tolerance: 0.006,
     damping: 0.04,
     dlsMaxDelta: 0.08,
@@ -249,7 +247,7 @@ const defaultRecordedKeyframes = [
         durationMs: 504.20836181867094,
     },
     {
-        label: 'Keyframe 5',
+        label: 'Keyframe 4',
         position: [0.043, 0.288, -0.414],
         rotation: [1.0, 1.0, -90.3],
         chainPose: [
@@ -265,8 +263,8 @@ const defaultRecordedKeyframes = [
 ];
 
 const debugParams = {
-    showActuatorColliders: true,
-    showEndControl: true,
+    showActuatorColliders: false,
+    showEndControl: false,
     showTrajectory: true,
 };
 
@@ -806,7 +804,6 @@ function createSequencePlayer() {
         },
         getInitialQ: () => qCurrent,
         maxIter: solverParams.maxIter,
-        alpha: solverParams.alpha,
         tolerance: solverParams.tolerance,
         solveMode: getSolverMode(),
         solverMethod: solverParams.solverMethod,
@@ -1016,7 +1013,6 @@ function createSolverControls() {
     const bindings = [
         ['solver-max-iter', 'maxIter', true],
         ['solver-tolerance', 'tolerance', false],
-        ['solver-alpha', 'alpha', false],
         ['solver-damping', 'damping', false],
         ['solver-max-delta', 'dlsMaxDelta', false],
         ['solver-rotation-weight', 'rotationWeight', false],
@@ -1349,15 +1345,6 @@ function getCubePosition(context, outPosition, outQuaternion) {
     return true;
 }
 
-function solveIfPending() {
-    sequencePlayer?.solveIfPending({
-        targetTolerance: solverParams.tolerance,
-        pickStagePositionTolerance: solverParams.tolerance,
-        descendStageTolerance: solverParams.tolerance,
-        descendTimeoutMs: 1200,
-    });
-}
-
 function syncSequenceTargetFromGrip() {
     if (!sequenceTarget || !actuator) {
         return;
@@ -1429,10 +1416,7 @@ function completePickSequence(cubeItem, context = {}) {
     }
     if (cubeItem && !cubeItem.placed) {
         cubeItem.placed = true;
-        placedCount += 1;
         sequenceGenerator?.setContext(null, { previewFirst: false });
-        setStatus(`Placed ${placedCount} / ${cubes.length}`);
-        return;
     }
     setStatus('Ready');
 }
@@ -1553,7 +1537,6 @@ function stopGeneratedSequence() {
 function resetCubes() {
     sequencePlayer?.reset();
     sequenceGenerator?.setPlaybackActive(false);
-    placedCount = 0;
     actuator.setOpenRatio(1);
     syncGripperFromActuator();
     for (const item of cubes) {
@@ -1659,7 +1642,7 @@ function hasAwakePhysicsBodies() {
 function renderFrame(deltaSeconds) {
     simulationClock.advance(deltaSeconds, () => {
         sequencePlayer?.updateStageLerp();
-        solveIfPending();
+        sequencePlayer?.solveIfPending();
         stepPhysics();
     });
     updateSolverUI();

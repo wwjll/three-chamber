@@ -348,6 +348,30 @@ test('SequencePlayer accepts the same position and rotation tolerances as DLS', 
     assert.ok(player.getSolveMetrics().rotationError > 0.006);
 });
 
+test('SequencePlayer solves grip targets at the actuator tool center point', () => {
+    const targetObject = new Object3D();
+    targetObject.position.set(0.3, 0.2, 0.1);
+    const gripPoint = new Object3D();
+    gripPoint.position.copy(targetObject.position);
+    const player = new SequencePlayer({
+        chain: {
+            roboticArm: new Object3D(),
+            joints: [],
+            getActuator: () => ({ gripPoint }),
+            getActuatorWorldPosition: (out) => out.set(0, 0, 0),
+            getActuatorWorldQuaternion: (out) => out.identity(),
+        },
+        getTargetObject: () => targetObject,
+        getInitialQ: () => [0],
+        solverMethod: 'DLS',
+        tolerance: 1e-6,
+    });
+    player.queueSolveFromTarget();
+    player.solveIfPending();
+    assert.equal(player.getSolveMetrics().converged, true);
+    assert.equal(player.getSolveMetrics().positionError, 0);
+});
+
 test('SequencePlayer stops a stalled manual target and reports a failure', () => {
     let nowMs = 0;
     const errors = [];

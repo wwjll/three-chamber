@@ -424,6 +424,30 @@ test('SequenceGenerator loads recorded keyframes with one sequence commit', () =
     assert.equal(generator.getSelectedKeyframe().label, 'First');
 });
 
+test('SequenceGenerator keeps generated keyframe labels in list order', () => {
+    const generator = new SequenceGenerator({ targetObject: new Object3D() });
+    const pose = {
+        position: [0.2, 0.3, 0.4],
+        rotation: [0, 0, -90],
+        chainPose: [0, 0.1, 0.2, 0.3, 0.4, 0.5],
+    };
+    const labels = () => generator.getKeyframes().map(({ label }) => label);
+    generator.addRecordedKeyframes([
+        { ...pose, label: 'Keyframe 1' },
+        { ...pose, label: 'Keyframe 2' },
+        { ...pose, label: 'Carry' },
+        { ...pose, label: 'Keyframe 5' },
+    ]);
+    assert.deepEqual(labels(), ['Keyframe 1', 'Keyframe 2', 'Carry', 'Keyframe 4']);
+
+    generator.selectKeyframe(0, { preview: false });
+    generator.deleteSelectedKeyframe();
+    assert.deepEqual(labels(), ['Keyframe 1', 'Carry', 'Keyframe 3']);
+
+    generator.addRecordedKeyframe(pose);
+    assert.deepEqual(labels(), ['Keyframe 1', 'Carry', 'Keyframe 3', 'Keyframe 4']);
+});
+
 
 test('SequenceGenerator validates imported joint poses against model limits', () => {
     const statuses = [];

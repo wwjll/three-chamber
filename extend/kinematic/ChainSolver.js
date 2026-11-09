@@ -2,14 +2,18 @@
  * @fileoverview Iterative IK solver for a serial chain with optional orientation control.
  *
  * Solver model:
- * - Uses Jacobian-based iterative updates with a simple backtracking line-search.
+ * - `Jacobian`: Jacobian-transpose descent with an adaptive step length.
+ * - `DLS`: damped least squares.
+ * - Both minimise `|e_pos|² + rotationWeight² * |e_rot|²` with backtracking.
  * - Supports two modes:
  *   - `Position Only`
  *   - `Position + Rotation`
  * - Applies joint limits each step (`buildJointLimits` + `clampJointValue`).
  *
  * Expected external dependencies:
- * - `chain.getActuatorWorldPosition(out)` and `chain.getActuatorWorldQuaternion(out)`.
+ * - `chain.getActuatorWorldPosition(out)` and `chain.getActuatorWorldQuaternion(out)`
+ *   for the default tracked frame (the chain flange).
+ * - Optional `endEffector` Object3D that replaces the flange as the tracked frame.
  * - `joint.getWorldPosition(out)` and `joint.getWorldAxis(out)` for Jacobian columns.
  * - Optional `forwardKinematics(q)` callback to push candidate `q` into scene transforms.
  *
@@ -17,9 +21,10 @@
  * - `targetPosition`: desired end-effector world position.
  * - `targetQuaternion`: desired end-effector world orientation.
  * - `chain`: chain wrapper used for querying current actuator pose.
+ * - `endEffector`: optional tracked frame rigidly attached past the last joint,
+ *   such as a gripper tool center point; `null` tracks the chain flange.
  * - `joints`: ordered joint list for Jacobian construction.
  * - `maxIter`: max solver iterations per solve call.
- * - `alpha`: base step size used for update scaling.
  * - `tolerance`: position convergence threshold in scene units.
  * - `rotationTolerance`: orientation convergence threshold in radians.
  * - `solveMode`: `'Position Only'` or `'Position + Rotation'`.
@@ -34,7 +39,7 @@
  * - `posErr`: position error vector.
  * - `rotErr`: axis-angle rotation error vector.
  * - `currentQuat`, `invCurrentQuat`, `deltaQuat`: orientation error pipeline.
- * - `errorVec6`: packed task error `[ex, ey, ez, erx, ery, erz]`.
+ * - `errorVec6`: packed weighted task error `[ex, ey, ez, w*erx, w*ery, w*erz]`.
  */
 import { Quaternion, Vector3 } from 'three';
 
@@ -101,8 +106,8 @@ class ChainSolver {
         this.targetQuaternion = options.targetQuaternion?.clone()
             ?? new Quaternion();
         this.chain = options.chain ?? null;
+        this.endEffector = options.endEffector ?? null;
         this.maxIter = options.maxIter ?? 20;
-        this.alpha = options.alpha ?? 0.05;
         this.tolerance = options.tolerance ?? 1e-3;
         this.solveMode = options.solveMode === 'Position + Rotation'
             ? 'Position + Rotation'
@@ -218,13 +223,11 @@ class ChainSolver {
 
     computeTaskError(q) {
         this.forwardKinematics?.(q);
-        const endEffectorPosition = this.chain?.getActuatorWorldPosition?.(this._tmp.p)
-            ?? this._tmp.p.set(0, 0, 0);
+        const endEffectorPosition = this.getEndEffectorWorldPosition(this._tmp.p);
         const posErr = this._tmp.posErr.copy(this.targetPosition).sub(endEffectorPosition);
         const rotErr = this._tmp.rotErr.set(0, 0, 0);
 
-        const currentQuat = this.chain?.getActuatorWorldQuaternion?.(this._tmp.currentQuat)
-            ?? this._tmp.currentQuat.identity();
+        const currentQuat = this.getEndEffectorWorldQuaternion(this._tmp.currentQuat);
         const invCurrentQuat = this._tmp.invCurrentQuat.copy(currentQuat).invert();
         const deltaQuat = this._tmp.deltaQuat
             .multiplyQuaternions(this.targetQuaternion, invCurrentQuat)
@@ -248,6 +251,18 @@ class ChainSolver {
         }
 
         return { posErr, rotErr };
+    }
+
+    getEndEffectorWorldPosition(out) {
+        return this.endEffector?.getWorldPosition(out)
+            ?? this.chain?.getActuatorWorldPosition?.(out)
+            ?? out.set(0, 0, 0);
+    }
+
+    getEndEffectorWorldQuaternion(out) {
+        return this.endEffector?.getWorldQuaternion(out)
+            ?? this.chain?.getActuatorWorldQuaternion?.(out)
+            ?? out.identity();
     }
 
     computePositionError(q) {
@@ -338,6 +353,8 @@ class ChainSolver {
     computeJacobianAnalytic(q, output = null) {
         // Analytic Jacobian for revolute joints:
         // J = [Jv_i, Jw_i], Jv_i = a_i x (p - p_i), Jw_i = a_i.
+        // p is the tracked frame origin; any frame rigidly attached past the
+        // last joint (flange or tool center point) shares the same Jw columns.
         const n = q.length;
         const jacobian = output ?? Array.from(
             { length: 6 },
@@ -348,9 +365,7 @@ class ChainSolver {
             jacobian[row].length = n;
         }
         const joints = this.joints || [];
-        const endEffectorPosition = this.chain?.getActuatorWorldPosition?.(this._tmp.p)
-            ?? this._tmp.p.set(0, 0, 0);
-        const p = this._tmp.p.copy(endEffectorPosition);
+        const p = this.getEndEffectorWorldPosition(this._tmp.p);
         const pi = this._tmp.pi;
         const ai = this._tmp.ai;
         const r = this._tmp.r;
@@ -554,141 +569,104 @@ class ChainSolver {
     }
 
     solveJacobianTranspose(qe) {
-        // Iteration controls and safety limits.
-        // maxRetry + alphaTry implement a simple backtracking line-search.
-        // maxDelta limits single-joint jump size per trial step.
-        const maxIter = this.maxIter;
-        let alpha = this.alpha;
+        // The joint direction g = Jᵀe is the steepest-descent direction of the
+        // weighted error. A unit step along g moves the end effector by
+        // v = J g under the linear model, so the step length
+        // alpha = (e·v) / (v·v) = |g|² / |v|² minimises |e - alpha v|²
+        // (Buss, adaptive Jacobian transpose). maxDelta then caps the largest
+        // joint change without bending the direction.
         const maxRetry = 5;
         const maxDelta = 0.05;
-        const improveTol = 1e-9;
-        const minAlpha = 1e-4;
-        const maxAlpha = 0.2;
-        // Work on a copy so caller state is only replaced by the returned solution.
         const q = qe.slice();
+        const jointCount = q.length;
         this.lastIterationCount = 0;
-        const jointLimits = this.buildJointLimits(q.length);
-        for (let i = 0; i < q.length; i++) {
-            q[i] = this.clampJointValue(q[i], jointLimits[i]);
+        const jointLimits = this.buildJointLimits(jointCount);
+        for (let joint = 0; joint < jointCount; joint++) {
+            q[joint] = this.clampJointValue(q[joint], jointLimits[joint]);
         }
-        // Position-only mode zeroes rotational error terms, but keeps the same pipeline.
         const includeRotation = this.isPositionAndRotationMode();
+        const rotationWeight = includeRotation ? this.rotationWeight : 0;
+        const rowCount = includeRotation ? 6 : 3;
+        // Rotation rows are scaled so metres and radians contribute comparably.
+        const rowWeights = [1, 1, 1, rotationWeight, rotationWeight, rotationWeight];
+        const weightedError = this._tmp.errorVec6;
+        const jacobian = Array.from({ length: 6 }, () => new Array(jointCount));
+        const gradient = new Array(jointCount);
+        const candidate = new Array(jointCount);
 
-        for (let iter = 0; iter < maxIter; iter++) {
-            this.lastIterationCount = iter + 1;
-            // Build 6D task error: [ex, ey, ez, erx, ery, erz].
-            // In position-only mode we explicitly clear rotational components.
+        for (let iteration = 0; iteration < this.maxIter; iteration++) {
+            this.lastIterationCount = iteration + 1;
             const { posErr, rotErr } = this.computeTaskError(q);
-            const errorVec6 = this._tmp.errorVec6;
-            errorVec6[0] = posErr.x;
-            errorVec6[1] = posErr.y;
-            errorVec6[2] = posErr.z;
-            if (includeRotation) {
-                errorVec6[3] = rotErr.x;
-                errorVec6[4] = rotErr.y;
-                errorVec6[5] = rotErr.z;
-            } else {
-                errorVec6[3] = 0;
-                errorVec6[4] = 0;
-                errorVec6[5] = 0;
-            }
-            const errorNorm = includeRotation
-                ? Math.hypot(
-                    errorVec6[0], errorVec6[1], errorVec6[2],
-                    errorVec6[3], errorVec6[4], errorVec6[5]
-                )
-                : Math.hypot(errorVec6[0], errorVec6[1], errorVec6[2]);
-
-            // Position and orientation use separate physical tolerances in both methods.
             if (this.isTaskConverged(posErr.length(), rotErr.length())) {
-                if (this.debug) {
-                    console.log(`[IK] iter=${iter} errorNorm=${errorNorm} maxAbsDq=0 alpha=${alpha} converged=true`);
-                }
                 break;
             }
+            const currentScore = posErr.lengthSq()
+                + rotationWeight * rotationWeight * rotErr.lengthSq();
+            weightedError[0] = posErr.x;
+            weightedError[1] = posErr.y;
+            weightedError[2] = posErr.z;
+            weightedError[3] = rotErr.x * rotationWeight;
+            weightedError[4] = rotErr.y * rotationWeight;
+            weightedError[5] = rotErr.z * rotationWeight;
+            this.computeJacobianAnalytic(q, jacobian);
 
-            // Analytic Jacobian is reused across retries in the same iteration.
-            const jacobian = this.computeJacobianAnalytic(q);
+            let gradientSq = 0;
+            let largestGradient = 0;
+            for (let joint = 0; joint < jointCount; joint++) {
+                let sum = 0;
+                for (let row = 0; row < rowCount; row++) {
+                    sum += rowWeights[row] * jacobian[row][joint] * weightedError[row];
+                }
+                gradient[joint] = sum;
+                gradientSq += sum * sum;
+                largestGradient = Math.max(largestGradient, Math.abs(sum));
+            }
+            // A vanishing or non-finite gradient leaves no descent direction.
+            if (!(gradientSq > 1e-20)) {
+                break;
+            }
+            let predictedSq = 0;
+            for (let row = 0; row < rowCount; row++) {
+                let sum = 0;
+                for (let joint = 0; joint < jointCount; joint++) {
+                    sum += rowWeights[row] * jacobian[row][joint] * gradient[joint];
+                }
+                predictedSq += sum * sum;
+            }
+            let step = Math.min(
+                gradientSq / predictedSq,
+                maxDelta / largestGradient,
+            );
+
+            // The linear model ignores curvature, so halve rejected steps.
             let accepted = false;
-            let maxAbsDq = 0;
-            let alphaTry = alpha;
-            let bestErrorNorm = Infinity;
-            let bestCandidate = null;
-            let bestMaxAbsDq = 0;
-
-            for (let retry = 0; retry < maxRetry; retry++) {
-                const qCandidate = q.slice();
-                maxAbsDq = 0;
-
-                for (let i = 0; i < q.length; i++) {
-                    // Gradient direction for joint i: (J^T * e)_i.
-                    const jtError =
-                        jacobian[0][i] * errorVec6[0] +
-                        jacobian[1][i] * errorVec6[1] +
-                        jacobian[2][i] * errorVec6[2] +
-                        jacobian[3][i] * errorVec6[3] +
-                        jacobian[4][i] * errorVec6[4] +
-                        jacobian[5][i] * errorVec6[5];
-                    // Apply step size then clamp to avoid unstable jumps.
-                    let dq = alphaTry * jtError;
-                    if (dq > maxDelta) dq = maxDelta;
-                    if (dq < -maxDelta) dq = -maxDelta;
-                    const nextQ = this.clampJointValue(qCandidate[i] + dq, jointLimits[i]);
-                    const absDq = Math.abs(nextQ - q[i]);
-                    qCandidate[i] = nextQ;
-                    if (absDq > maxAbsDq) maxAbsDq = absDq;
+            for (let retry = 0; retry < maxRetry && !accepted; retry++) {
+                for (let joint = 0; joint < jointCount; joint++) {
+                    candidate[joint] = this.clampJointValue(
+                        q[joint] + gradient[joint] * step,
+                        jointLimits[joint],
+                    );
                 }
-
-                const nextErrorNorm = includeRotation
-                    ? this.computeTaskErrorNorm(qCandidate)
-                    : this.computePositionError(qCandidate).length();
-                // Track best trial, used by fallback when strict acceptance fails.
-                if (nextErrorNorm < bestErrorNorm) {
-                    bestErrorNorm = nextErrorNorm;
-                    bestCandidate = qCandidate;
-                    bestMaxAbsDq = maxAbsDq;
-                }
-
-                // Accept if error does not increase (with tiny tolerance).
-                if (nextErrorNorm <= errorNorm + improveTol) {
-                    for (let i = 0; i < q.length; i++) {
-                        q[i] = qCandidate[i];
+                const next = this.computeTaskError(candidate);
+                const candidateScore = next.posErr.lengthSq()
+                    + rotationWeight * rotationWeight * next.rotErr.lengthSq();
+                if (candidateScore <= currentScore) {
+                    for (let joint = 0; joint < jointCount; joint++) {
+                        q[joint] = candidate[joint];
                     }
                     accepted = true;
-                    alpha = alphaTry;
-                    break;
+                } else {
+                    step *= 0.5;
                 }
-
-                // Retry with smaller step size.
-                alphaTry *= 0.5;
             }
 
             if (this.debug) {
-                console.log(`[IK] iter=${iter} errorNorm=${errorNorm} maxAbsDq=${maxAbsDq} alpha=${alpha}`);
+                console.log(`[IK] iter=${iteration} score=${currentScore} step=${step} accepted=${accepted}`);
             }
-
+            // Every halving failed: the pose is at a local minimum or joint limit.
             if (!accepted) {
-                // Keep moving toward the best trial step to avoid complete stalling.
-                if (bestCandidate && bestErrorNorm <= errorNorm * 1.05) {
-                    for (let i = 0; i < q.length; i++) {
-                        q[i] = bestCandidate[i];
-                    }
-                    alpha = Math.max(alphaTry, minAlpha);
-                    if (this.debug) {
-                        console.log(`[IK] iter=${iter} fallback=true bestErrorNorm=${bestErrorNorm} maxAbsDq=${bestMaxAbsDq} alpha=${alpha}`);
-                    }
-                    continue;
-                }
-
-                alpha = Math.max(alphaTry, minAlpha);
-                if (this.debug) {
-                    console.log(`[IK] iter=${iter} rejected=true alphaReduced=${alpha}`);
-                }
-                continue;
+                break;
             }
-
-            // If accepted, cautiously increase step size for faster progress.
-            alpha = Math.min(alpha * 1.2, maxAlpha);
         }
 
         this._recordSolveResult(q);

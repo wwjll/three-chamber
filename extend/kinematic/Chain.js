@@ -10,14 +10,6 @@ const _GRIPPER_INTERACTION_GROUPS = _encodeInteractionGroups(_GRIPPER_GROUP, _IN
 const _tmpWorldPosition = new Vector3();
 const _tmpParentQuat = new Quaternion();
 const _tmpWorldQuat = new Quaternion();
-const _tmpMountPos = new Vector3();
-const _tmpMountQuat = new Quaternion();
-const _tmpGripQuatLocal = new Quaternion();
-const _tmpInvMountQuat = new Quaternion();
-const _tmpMountToGripQuat = new Quaternion();
-const _tmpInvMountToGripQuat = new Quaternion();
-const _tmpMountToGripPos = new Vector3();
-const _tmpRotatedMountToGripPos = new Vector3();
 const _graspLocalAxis = new Vector3(1, 0, 0);
 const _worldDownAxis = new Vector3(0, -1, 0);
 
@@ -435,38 +427,6 @@ class Actuator {
 
     getVerticalGripQuaternion(out = new Quaternion()) {
         return out.setFromUnitVectors(_graspLocalAxis, _worldDownAxis);
-    }
-
-    computeTopDownPickPose(cubeWorldPosition, cubeSize = 0.06, hover = 0.06, outPosition = new Vector3(), outQuaternion = new Quaternion()) {
-        const size = Math.max(0.001, cubeSize);
-        const hoverOffset = hover;
-        outPosition.copy(cubeWorldPosition);
-        outPosition.y += size * 0.5 + hoverOffset;
-        this.getVerticalGripQuaternion(outQuaternion);
-        return { position: outPosition, quaternion: outQuaternion };
-    }
-
-    computeEndTargetFromGripTarget(gripTargetPosition, gripTargetQuaternion, outEndPosition = new Vector3(), outEndQuaternion = new Quaternion()) {
-        const endNode = this.object.parent;
-        if (!endNode || !gripTargetPosition || !gripTargetQuaternion) {
-            if (gripTargetPosition) outEndPosition.copy(gripTargetPosition);
-            if (gripTargetQuaternion) outEndQuaternion.copy(gripTargetQuaternion);
-            return { position: outEndPosition, quaternion: outEndQuaternion };
-        }
-
-        endNode.updateWorldMatrix(true, false);
-        endNode.getWorldPosition(_tmpMountPos);
-        endNode.getWorldQuaternion(_tmpMountQuat);
-        this.getGripWorldPosition(_tmpWorldPosition);
-        this.getGripWorldQuaternion(_tmpGripQuatLocal);
-        _tmpInvMountQuat.copy(_tmpMountQuat).invert();
-        _tmpMountToGripQuat.copy(_tmpInvMountQuat).multiply(_tmpGripQuatLocal).normalize();
-        _tmpMountToGripPos.copy(_tmpWorldPosition).sub(_tmpMountPos).applyQuaternion(_tmpInvMountQuat);
-        _tmpInvMountToGripQuat.copy(_tmpMountToGripQuat).invert();
-        outEndQuaternion.copy(gripTargetQuaternion).multiply(_tmpInvMountToGripQuat).normalize();
-        _tmpRotatedMountToGripPos.copy(_tmpMountToGripPos).applyQuaternion(outEndQuaternion);
-        outEndPosition.copy(gripTargetPosition).sub(_tmpRotatedMountToGripPos);
-        return { position: outEndPosition, quaternion: outEndQuaternion };
     }
 
     setLocalPosition(localPosition) {

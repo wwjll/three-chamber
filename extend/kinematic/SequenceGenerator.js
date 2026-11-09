@@ -17,6 +17,8 @@ const GENERATED_TARGET_KIND = 'sequenceKeyframe';
 const HOLD_ACTION = 'hold';
 const OPEN_ACTION = 'open';
 const CLOSE_ACTION = 'closeUntilContact';
+// Labels in this form are generated names that track the keyframe position.
+const GENERATED_LABEL_PATTERN = /^Keyframe \d+$/;
 const VALID_GRIP_ACTIONS = new Set([
     HOLD_ACTION,
     OPEN_ACTION,
@@ -262,7 +264,6 @@ class SequenceGenerator {
         holdMs = 0,
         gripAction = HOLD_ACTION,
         gripDurationMs = this.defaultGripDurationMs,
-        toleranceProfile,
     } = {}) {
         if (!resolver) {
             throw new TypeError('A resolver keyframe requires a resolver function.');
@@ -279,7 +280,6 @@ class SequenceGenerator {
                 gripDurationMs,
                 this.defaultGripDurationMs,
             ),
-            toleranceProfile,
         };
         this.keyframes.push(keyframe);
         this.selectKeyframe(this.keyframes.length - 1, { preview: false });
@@ -514,6 +514,7 @@ class SequenceGenerator {
         if (recorded.length === 0) {
             return recorded;
         }
+        this._renumberGeneratedLabels();
         this.selectedIndex = clampIndex(selectedIndex, this.keyframes.length);
         this._syncFormFromSelection();
         this._commitChange();
@@ -594,6 +595,7 @@ class SequenceGenerator {
         }
         const [removed] = this.keyframes.splice(this.selectedIndex, 1);
         this._resolvedPoseById.delete(removed.id);
+        this._renumberGeneratedLabels();
         this.selectedIndex = clampIndex(
             this.selectedIndex,
             this.keyframes.length,
@@ -779,7 +781,6 @@ class SequenceGenerator {
                     rotationInterpolation: 'eulerXYZ',
                     solveWhileLerping: true,
                     completion: 'solve',
-                    toleranceProfile: keyframe.toleranceProfile,
                 });
             }
 
@@ -1136,6 +1137,16 @@ class SequenceGenerator {
             return typedLabel;
         }
         return `Keyframe ${this.keyframes.length + 1}`;
+    }
+
+    // Keyframes are only appended or removed, so generated names need
+    // renumbering after loads and deletions; custom labels are kept.
+    _renumberGeneratedLabels() {
+        this.keyframes.forEach((keyframe, index) => {
+            if (GENERATED_LABEL_PATTERN.test(keyframe.label)) {
+                keyframe.label = `Keyframe ${index + 1}`;
+            }
+        });
     }
 
     _syncFormFromSelection() {

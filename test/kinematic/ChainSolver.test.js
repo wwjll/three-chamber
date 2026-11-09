@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Quaternion, Vector3 } from 'three';
+import { Object3D, Quaternion, Vector3 } from 'three';
 import { ChainSolver } from '../../extend/kinematic/ChainSolver.js';
 
 test('ChainSolver runs only the selected IK method', () => {
@@ -52,6 +52,45 @@ test('ChainSolver DLS converges on a reachable revolute target', () => {
 
     assert.ok(Math.abs(result[0] - Math.PI / 2) < 1e-3);
     assert.ok(endPosition.distanceTo(solver.targetPosition) < 1e-5);
+});
+
+test('ChainSolver DLS tracks an end effector offset from the flange', () => {
+    const link = new Object3D();
+    const flange = new Object3D();
+    flange.position.set(0.1, 0, 0);
+    link.add(flange);
+    const toolCenter = new Object3D();
+    toolCenter.position.set(0, 0.05, 0);
+    flange.add(toolCenter);
+    const solver = new ChainSolver({
+        targetPosition: new Vector3(-0.05, 0.1, 0),
+        chain: {
+            getActuatorWorldPosition: (out) => flange.getWorldPosition(out),
+            getActuatorWorldQuaternion: (out) => flange.getWorldQuaternion(out),
+        },
+        endEffector: toolCenter,
+        joints: [{
+            getWorldPosition: (out) => out.set(0, 0, 0),
+            getWorldAxis: (out) => out.set(0, 0, 1),
+        }],
+        forwardKinematics: ([angle]) => {
+            link.rotation.z = angle;
+        },
+        solverMethod: 'DLS',
+        maxIter: 40,
+        tolerance: 1e-5,
+        damping: 0.02,
+        dlsMaxDelta: 0.2,
+    });
+
+    const q = solver.solve([0]);
+
+    assert.ok(Math.abs(q[0] - Math.PI / 2) < 1e-3);
+    assert.ok(
+        toolCenter.getWorldPosition(new Vector3())
+            .distanceTo(solver.targetPosition) < 1e-5,
+    );
+    assert.equal(solver.getSolveResult().converged, true);
 });
 
 function createRevoluteFixture(options = {}) {
@@ -146,20 +185,42 @@ test('DLS result records per-call convergence thresholds', () => {
     assert.equal(solver.evaluateConvergence([0]).converged, false);
 });
 
-test('Jacobian restores the returned pose after every trial is rejected', () => {
-    const targetAngle = 0.01;
+test('Jacobian adaptive step converges regardless of the lever arm scale', () => {
+    const targetAngle = 0.3;
     const { solver, endPosition } = createRevoluteFixture({
+        radius: 0.1,
         solverMethod: 'Jacobian',
-        targetPosition: new Vector3(Math.cos(targetAngle), Math.sin(targetAngle), 0),
-        alpha: 100,
-        maxIter: 1,
+        targetPosition: new Vector3(
+            0.1 * Math.cos(targetAngle),
+            0.1 * Math.sin(targetAngle),
+            0,
+        ),
+        maxIter: 12,
         tolerance: 1e-5,
     });
+    const q = solver.solve([0]);
+
+    assert.ok(Math.abs(q[0] - targetAngle) < 1e-3);
+    assert.ok(endPosition.distanceTo(solver.targetPosition) < 1e-5);
+    assert.equal(solver.getSolveResult().status, 'converged');
+});
+
+test('Jacobian stops and restores the pose when every trial is rejected', () => {
+    const targetAngle = 0.01;
+    const { solver, endPosition, joint } = createRevoluteFixture({
+        solverMethod: 'Jacobian',
+        targetPosition: new Vector3(Math.cos(targetAngle), Math.sin(targetAngle), 0),
+        maxIter: 40,
+        tolerance: 1e-5,
+    });
+    // A reversed axis makes the Jacobian predict motion away from the target.
+    joint.getWorldAxis = (out) => out.set(0, 0, -1);
     const q = solver.solve([0]);
 
     assert.deepEqual(q, [0]);
     assert.ok(endPosition.distanceTo(new Vector3(1, 0, 0)) < 1e-12);
     assert.equal(solver.getSolveResult().status, 'iteration-limit');
+    assert.equal(solver.getSolveResult().iterations, 1);
 });
 
 test('numeric Jacobian matches a revolute derivative and restores the sampled pose', () => {
