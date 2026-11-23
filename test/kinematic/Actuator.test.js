@@ -8,7 +8,14 @@ test('Actuator retains collider handles when its jaw transforms or shape change'
     const world = new World({ x: 0, y: 0, z: 0 });
     try {
         const actuator = new Actuator({ physicsWorld: world });
-        const handles = actuator._physicsColliders.map((collider) => collider.handle);
+        const jaws = actuator.getJawColliders();
+        const colliderCount = world.colliders.len();
+        const assertCollidersRetained = () => {
+            const { left, right } = actuator.getJawColliders();
+            assert.equal(left, jaws.left);
+            assert.equal(right, jaws.right);
+            assert.equal(world.colliders.len(), colliderCount);
+        };
         let created = 0;
         let removed = 0;
         const createCollider = world.createCollider.bind(world);
@@ -18,7 +25,7 @@ test('Actuator retains collider handles when its jaw transforms or shape change'
         const oldPosition = actuator.getPhysicsColliderBoxes()[1].position.y;
         actuator.setOpenRatio(0.5);
         assert.notEqual(actuator.getPhysicsColliderBoxes()[1].position.y, oldPosition);
-        assert.deepEqual(actuator._physicsColliders.map((collider) => collider.handle), handles);
+        assertCollidersRetained();
         const boxes = actuator.getPhysicsColliderBoxes().map((box) => ({
             ...box,
             halfExtents: { ...box.halfExtents },
@@ -28,7 +35,7 @@ test('Actuator retains collider handles when its jaw transforms or shape change'
         boxes[1].position.y = 0.02;
         boxes[1].halfExtents.x = 0.03;
         actuator.setPhysicsColliderBoxes(boxes);
-        assert.deepEqual(actuator._physicsColliders.map((collider) => collider.handle), handles);
+        assertCollidersRetained();
         world.step();
         assert.ok(Math.abs(actuator.getJawColliders().left.translation().y - 0.02) < 1e-6);
         assert.ok(Math.abs(actuator.getJawColliders().left.halfExtents().x - 0.03) < 1e-6);

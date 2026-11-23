@@ -1,0 +1,80 @@
+<html>
+
+<head>
+    <title>Path tracing diagnostics</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1" />
+    <style>
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            color: #e8edf5;
+            background: #11141a;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #diagnostic-panel {
+            position: absolute;
+            left: 14px;
+            bottom: 14px;
+            width: min(440px, calc(100vw - 28px));
+            padding: 12px 14px;
+            box-sizing: border-box;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 8px;
+            background: rgba(12, 15, 20, 0.86);
+            backdrop-filter: blur(8px);
+            pointer-events: none;
+        }
+
+        #status {
+            margin-bottom: 8px;
+            color: #8ed7ff;
+        }
+
+        #diagnostic-report {
+            min-height: 10em;
+            margin: 0;
+            white-space: pre-wrap;
+            line-height: 1.45;
+        }
+
+        #hint {
+            margin-top: 8px;
+            color: #a6afbd;
+            font-size: 12px;
+        }
+
+        #pixel-marker {
+            position: absolute;
+            display: none;
+            width: 14px;
+            height: 14px;
+            margin: -8px 0 0 -8px;
+            border: 2px solid white;
+            border-radius: 50%;
+            box-shadow: 0 0 0 2px black, 0 0 12px white;
+            pointer-events: none;
+        }
+    </style>
+    <link rel="shortcut icon" href="#">
+</head>
+
+<body>
+    <div id="pixel-marker"></div>
+    <div id="diagnostic-panel">
+        <div id="status">Preparing procedural scene…</div>
+        <pre id="diagnostic-report">Select a diagnostic view, then click a pixel.</pre>
+        <div id="hint">Drag to orbit. Click without dragging to inspect one deterministic GPU path sample.</div>
+    </div>
+    <script type="module" src="pathTracingDiagnostics.js"></script>
+</body>
+
+</html>

@@ -1,4 +1,4 @@
-<html>
+<html lang="en">
 
 <head>
     <title>Dissolve</title>
@@ -10,6 +10,7 @@
             padding: 0;
             margin: 0;
             overflow: hidden;
+            background: #111;
             font-family: monospace;
         }
 
@@ -23,7 +24,113 @@
 
         #output {
             white-space: pre;
-            margin-bottom: 10px;
+        }
+
+        #dissolve-controls {
+            --material-color: #326bc2;
+            --fire-color: #fa9200;
+            --transparent-color: #404148;
+            --tp-base-background-color: #28292f;
+            --tp-base-shadow-color: transparent;
+            position: absolute;
+            z-index: 1;
+            top: 8px;
+            right: 8px;
+            box-sizing: border-box;
+            width: 320px;
+            max-height: calc(100dvh - 16px);
+            overflow: auto;
+            border-radius: 6px;
+            background: var(--tp-base-background-color);
+            color: #f1f2f4;
+            color-scheme: dark;
+            font: 13px/1.45 system-ui, sans-serif;
+        }
+
+        #dissolve-controls summary {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .dissolve-monitor {
+            display: grid;
+            gap: 8px;
+            padding: 10px 12px 12px;
+            border-top: 1px solid #3b3c44;
+            border-bottom: 1px solid #3b3c44;
+        }
+
+        .dissolve-monitor-header,
+        .dissolve-axis {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        #dissolve-progress {
+            width: 100%;
+            margin: 0;
+            accent-color: #e9ebef;
+        }
+
+        #dissolve-progress-value {
+            font-variant-numeric: tabular-nums;
+        }
+
+        .dissolve-axis {
+            color: #bbc0c9;
+            font-size: 12px;
+        }
+
+        .dissolve-track {
+            position: relative;
+            height: 14px;
+            margin-top: 4px;
+            border-radius: 2px;
+            background: linear-gradient(to right,
+                var(--material-color) 0 var(--material-end),
+                var(--fire-color) var(--material-end) var(--fire-end),
+                var(--transparent-color) var(--fire-end) 100%);
+        }
+
+        .dissolve-track::after {
+            position: absolute;
+            inset-block: -3px;
+            left: var(--sample-position);
+            width: 2px;
+            background: #fff;
+            content: "";
+        }
+
+        .dissolve-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 12px;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+            font-size: 12px;
+        }
+
+        .dissolve-legend li {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .dissolve-legend li::before {
+            width: 8px;
+            height: 8px;
+            border-radius: 1px;
+            background: var(--swatch);
+            content: "";
+        }
+
+        #dissolve-sample {
+            margin: 0;
+            color: #d8dbe0;
+            font-size: 12px;
         }
     </style>
     <link rel="shortcut icon" href="#">
@@ -31,9 +138,30 @@
 
 <body>
     <div id="info">
-        <div id="output"></div>
-        <div>three.js Dissolve</div>
+        <div id="output" role="status"></div>
     </div>
+    <details id="dissolve-controls" open hidden>
+        <summary>Dissolve</summary>
+        <div id="dissolve-actions"></div>
+        <div class="dissolve-monitor">
+            <div class="dissolve-monitor-header">
+                <label for="dissolve-progress">Dissolve progress</label>
+                <span id="dissolve-progress-value" aria-hidden="true">0.00</span>
+            </div>
+            <input id="dissolve-progress" type="range" min="0" max="1" step="0.01" value="0">
+            <div aria-hidden="true">
+                <div class="dissolve-axis"><span>Noise 0</span><span>1</span></div>
+                <div class="dissolve-track"></div>
+            </div>
+            <ul class="dissolve-legend" aria-label="Fragment states">
+                <li style="--swatch: var(--material-color)">Material</li>
+                <li style="--swatch: var(--fire-color)">Fire edge</li>
+                <li style="--swatch: var(--transparent-color)">Transparent</li>
+            </ul>
+            <p id="dissolve-sample" aria-live="polite"></p>
+        </div>
+        <div id="dissolve-settings"></div>
+    </details>
     <script type="module" src="dissolve.js"></script>
 </body>
 

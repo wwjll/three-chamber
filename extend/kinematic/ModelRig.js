@@ -211,7 +211,6 @@ class ModelRig {
     syncBase({ syncUp = true, offset = {} } = {}) {
         if (syncUp) {
             alignBaseMatrix(this.root, offset);
-            this.root.matrixWorldNeedsUpdate = true;
             return;
         }
 

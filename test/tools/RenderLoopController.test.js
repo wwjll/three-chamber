@@ -26,7 +26,6 @@ test('RenderLoopController stops after one requested idle frame', () => {
         callbacks.shift()(117);
 
         assert.equal(renderCount, 1);
-        assert.equal(loop._running, false);
         assert.equal(callbacks.length, 0);
     } finally {
         if (originalRequestAnimationFrame) {

@@ -17,7 +17,6 @@ function copyAssetsIntoBundle() {
 function main() {
   copyAssetsIntoBundle();
 
-  // This build step is used by the GitHub Actions deploy workflow.
   // The homepage is generated after assets are copied so all relative links
   // resolve against the final published directory structure.
   execFileSync(

@@ -21,8 +21,8 @@ importers:
         specifier: ^2.14.0
         version: 2.14.0(@swc/helpers@0.5.15)
       three:
-        specifier: ^0.160.0
-        version: 0.160.1
+        specifier: ^0.187.0
+        version: 0.187.0
       tweakpane:
         specifier: ^4.0.5
         version: 4.0.5
@@ -1345,8 +1345,8 @@ packages:
     resolution: {integrity: sha512-wK0Ri4fOGjv/XPy8SBHZChl8CM7uMc5VML7SqiQ0zG7+J5Vr+RMQDoHa2CNT6KHUnTGIXH34UDMkPzAUyapBZg==}
     engines: {node: '>=8'}
 
-  three@0.160.1:
-    resolution: {integrity: sha512-Bgl2wPJypDOZ1stAxwfWAcJ0WQf7QzlptsxkjYiURPz+n5k4RBDLsq+6f9Y75TYxn6aHLcWz+JNmwTOXWrQTBQ==}
+  three@0.187.0:
+    resolution: {integrity: sha512-Qiu7R+Cmh8CstZsY1uJOSWnVlfo7ZtNLV7mF8Jltk3LB3AtDu9cRZlcnRKkAk8Y4z6KKw35z7Y7Urd7jWY8etA==}
 
   timsort@0.3.0:
     resolution: {integrity: sha512-qsdtZH+vMoCARQtyod4imc2nIJwg9Cc7lPRrw9CzF8ZKR0khdr8+2nX80PBhET3tcyTtJDxAffGh2rXH4tyU8A==}
@@ -2970,7 +2970,7 @@ snapshots:
 
   term-size@2.2.1: {}
 
-  three@0.160.1: {}
+  three@0.187.0: {}
 
   timsort@0.3.0: {}
 

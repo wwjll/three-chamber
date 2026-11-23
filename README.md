@@ -2,6 +2,8 @@
 
 A repository of creative and practical experiments using Three.js.
 
+[Change Log](https://github.com/wwjll/three-chamber/blob/main/docs/changes/README.md)
+
 # How to run
 
 ```shell

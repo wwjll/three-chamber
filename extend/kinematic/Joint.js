@@ -41,6 +41,7 @@ class Joint extends Object3D {
 
         const m = new Matrix4().makeRotationZ(theta);
         this.matrix.copy(m);
+        this.matrixWorldNeedsUpdate = true;
 
         this.dh = { theta, d, a, alpha, thetaOffset };
         this.mode = 'DH';
@@ -53,21 +54,18 @@ class Joint extends Object3D {
         const m = new Matrix4().makeRotationZ(theta);
         m.setPosition(0, 0, d ?? 0);
         this.matrix.copy(m);
+        this.matrixWorldNeedsUpdate = true;
 
         this.mdh = { theta, d };
         this.mode = 'MDH';
     }
     getAutoSize() {
-        // Heuristic used by helpers for "relative" sizing.
-        // Prefer link offset (child Link) if available.
         const child = this.children.find((c) => c && c.isLink);
         if (child) {
             const e = child.matrix.elements;
-            // Matrix4 elements[12..14] are the translation (tx, ty, tz) in column-major order.
             const tx = e[12];
             const ty = e[13];
             const tz = e[14];
-            // Use the translation length as a proxy for link length from this joint to its child.
             const len = Math.sqrt(tx * tx + ty * ty + tz * tz);
             if (len > 0) return len;
         }
@@ -172,7 +170,6 @@ class Joint extends Object3D {
     }
 
     getLocalAxis(out = new Vector3()) {
-        // Local axis is always the joint's +Z in its own space.
         return out.copy(DEFAULT_JOINT_AXIS);
     }
 

@@ -180,8 +180,7 @@ needed to improve correctness, observability, convergence, and maintainability.
 
 ## Required Validation for Path Tracer Changes
 
-- Run `pnpm run test:path-tracing`.
-- Run ESLint for the modified path tracer and test files.
+- Run the every-change checks from [Validation](./validation.md).
 - Run a production Parcel build for `examples/pathTracing.html`.
 - Check generated shader assembly when shader modules change.
 - Run the deterministic browser smoke test for visible rendering, progressive

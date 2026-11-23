@@ -1,46 +1,3 @@
-/**
- * @fileoverview Iterative IK solver for a serial chain with optional orientation control.
- *
- * Solver model:
- * - `Jacobian`: Jacobian-transpose descent with an adaptive step length.
- * - `DLS`: damped least squares.
- * - Both minimise `|e_pos|² + rotationWeight² * |e_rot|²` with backtracking.
- * - Supports two modes:
- *   - `Position Only`
- *   - `Position + Rotation`
- * - Applies joint limits each step (`buildJointLimits` + `clampJointValue`).
- *
- * Expected external dependencies:
- * - `chain.getActuatorWorldPosition(out)` and `chain.getActuatorWorldQuaternion(out)`
- *   for the default tracked frame (the chain flange).
- * - Optional `endEffector` Object3D that replaces the flange as the tracked frame.
- * - `joint.getWorldPosition(out)` and `joint.getWorldAxis(out)` for Jacobian columns.
- * - Optional `forwardKinematics(q)` callback to push candidate `q` into scene transforms.
- *
- * Key public fields and meaning:
- * - `targetPosition`: desired end-effector world position.
- * - `targetQuaternion`: desired end-effector world orientation.
- * - `chain`: chain wrapper used for querying current actuator pose.
- * - `endEffector`: optional tracked frame rigidly attached past the last joint,
- *   such as a gripper tool center point; `null` tracks the chain flange.
- * - `joints`: ordered joint list for Jacobian construction.
- * - `maxIter`: max solver iterations per solve call.
- * - `tolerance`: position convergence threshold in scene units.
- * - `rotationTolerance`: orientation convergence threshold in radians.
- * - `solveMode`: `'Position Only'` or `'Position + Rotation'`.
- * - `debug`: enables optional verbose logging hooks.
- *
- * `_tmp` scratch fields (allocation-free math workspace):
- * - `p`: current end-effector world position.
- * - `pi`: current joint world position.
- * - `ai`: current joint world axis.
- * - `r`: lever arm vector (`p - pi`).
- * - `jcol`: temporary Jacobian translational column (`ai x r`).
- * - `posErr`: position error vector.
- * - `rotErr`: axis-angle rotation error vector.
- * - `currentQuat`, `invCurrentQuat`, `deltaQuat`: orientation error pipeline.
- * - `errorVec6`: packed weighted task error `[ex, ey, ez, w*erx, w*ery, w*erz]`.
- */
 import { Quaternion, Vector3 } from 'three';
 
 function solveLinearSystem(
@@ -177,9 +134,6 @@ class ChainSolver {
                 ?? 0;
             const qMin = minAngleDeg * toRad - thetaOffset;
             const qMax = maxAngleDeg * toRad - thetaOffset;
-            // Keep min/max ordering as-is:
-            // - min <= max: normal interval clamp.
-            // - min > max: wrap-around interval (crosses +/-pi), used by ring DOF as well.
             limits[i] = { min: qMin, max: qMax, wrap: qMin > qMax };
         }
 
@@ -397,7 +351,6 @@ class ChainSolver {
     }
 
     computeJacobianNumeric(q) {
-        // Central differences measure d(position)/dq, matching the analytic columns.
         const eps = 1e-5;
         const n = q.length;
         const jacobian = [new Array(n), new Array(n), new Array(n)];
@@ -621,7 +574,6 @@ class ChainSolver {
                 gradientSq += sum * sum;
                 largestGradient = Math.max(largestGradient, Math.abs(sum));
             }
-            // A vanishing or non-finite gradient leaves no descent direction.
             if (!(gradientSq > 1e-20)) {
                 break;
             }
@@ -663,7 +615,6 @@ class ChainSolver {
             if (this.debug) {
                 console.log(`[IK] iter=${iteration} score=${currentScore} step=${step} accepted=${accepted}`);
             }
-            // Every halving failed: the pose is at a local minimum or joint limit.
             if (!accepted) {
                 break;
             }

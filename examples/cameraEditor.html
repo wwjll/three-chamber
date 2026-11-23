@@ -1,4 +1,4 @@
-<html>
+<html lang="en">
 
 <head>
     <title>Camera Editor</title>
@@ -13,12 +13,16 @@
             font-family: monospace;
         }
 
+        body {
+            background: radial-gradient(ellipse at 46% 42%, #3e5973, #26384d 55%, #162131);
+        }
+
         #info {
             color: white;
             position: absolute;
             left: 10px;
             bottom: 10px;
-            opacity: 0.5;
+            opacity: 0.8;
         }
 
         #output {
@@ -31,7 +35,7 @@
 
 <body>
     <div id="info">
-        <div id="output"></div>
+        <div id="output" role="status"></div>
     </div>
 
     <script type="module" src="./cameraEditor.js"></script>

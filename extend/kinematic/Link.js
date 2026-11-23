@@ -16,6 +16,7 @@ class Link extends Object3D {
 
         const m = Tz.multiply(Rx).multiply(Tx);
         this.matrix.copy(m);
+        this.matrixWorldNeedsUpdate = true;
         return m;
     }
 
@@ -25,6 +26,7 @@ class Link extends Object3D {
 
         const m = Rx.multiply(Tx);
         this.matrix.copy(m);
+        this.matrixWorldNeedsUpdate = true;
         return m;
     }
 

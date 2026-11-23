@@ -8,11 +8,6 @@ import { Struct } from '../../extend/path-tracing/shaders/struct.glsl.js';
 const PI = Math.PI;
 const EPSILON = 1e-5;
 
-/**
- * Use a fixed-seed pseudo-random generator so every Monte Carlo test run uses
- * the same sample sequence. A failure then signals an algorithm change rather
- * than ordinary random fluctuation.
- */
 function createRandom(seed) {
     return () => {
         seed |= 0;
@@ -36,7 +31,6 @@ function roughnessToAlpha(roughness) {
     return Math.max(roughness * roughness, 0.001);
 }
 
-// Match the GGX normal distribution used by the shader's GTR2() function.
 function gtr2(normalDotHalf, alpha) {
     const alphaSquared = alpha * alpha;
     const denominator = 1 + (alphaSquared - 1) * normalDotHalf * normalDotHalf;
@@ -76,7 +70,6 @@ function sampleGgxDirection(random, view, roughness) {
     const sample = random();
     const cosTheta = Math.sqrt((1 - sample) / (1 + (alphaSquared - 1) * sample));
     const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta));
-    // Sample the microfacet half-vector H from the GGX distribution.
     const halfVector = [
         sinTheta * Math.cos(phi),
         sinTheta * Math.sin(phi),
@@ -84,7 +77,6 @@ function sampleGgxDirection(random, view, roughness) {
     ];
     const viewDotHalf = dot(view, halfVector);
 
-    // Compute the microfacet reflection direction L = reflect(-V, H).
     return [
         2 * viewDotHalf * halfVector[0] - view[0],
         2 * viewDotHalf * halfVector[1] - view[1],
@@ -115,8 +107,6 @@ function integrateCosineWithBsdfSampler({
     let estimate = 0;
 
     for (let i = 0; i < sampleCount; i++) {
-        // Reproduce the shader's mixture sampler: choose the GGX or diffuse
-        // branch, then weight the sample with the complete mixture PDF.
         const sampleSpecular = random() < specularWeight;
         const light = sampleSpecular
             ? sampleGgxDirection(random, view, roughness)
@@ -144,8 +134,6 @@ function integrateCosineWithBsdfSampler({
 }
 
 test('shader exposes a structured BSDF sampling contract', () => {
-    // This is an interface contract test; it does not execute GLSL. It keeps
-    // direction, PDF, weight, and event flags in one BSDFSample result.
     assert.match(Struct, /struct BSDFSample/);
     assert.match(Sample, /BSDFSample SampleBSDF/);
     assert.match(Sample, /BSDF_EVENT_DIFFUSE/);

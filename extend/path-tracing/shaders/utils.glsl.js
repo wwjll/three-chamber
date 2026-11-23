@@ -1,7 +1,6 @@
 const Utils =  /* glsl */`
     BVHNode getBVHNode(float i) {
         float width = bvhNodeDataTextureSize.x;
-        // 3 slots
         ivec2 uv0 = ivec2(mod(texelsPerBVHNode * i + 0.0, width), texelsPerBVHNode * i / width);
         ivec2 uv1 = ivec2(mod(texelsPerBVHNode * i + 1.0, width), texelsPerBVHNode * i / width);
         ivec2 uv2 = ivec2(mod(texelsPerBVHNode * i + 2.0, width), texelsPerBVHNode * i / width);
@@ -12,7 +11,6 @@ const Utils =  /* glsl */`
 
         vec3 aa = texel0.xyz;
         vec3 bb = vec3(texel0.w, texel1.xy);
-        // int id = int(texel1.z);
         int isLeaf = int(texel1.w);
 
         int left = int(texel2.x);

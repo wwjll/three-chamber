@@ -1,6 +1,6 @@
 import { Box3, EquirectangularReflectionMapping, PMREMGenerator, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
+import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
@@ -265,7 +265,7 @@ async function loadSceneAssets() {
     const envUrl = assetUrl + hdrAssetPaths[sceneParams.environment];
 
     const [envTexture, gltf] = await Promise.all([
-        new RGBELoader().loadAsync(envUrl),
+        new HDRLoader().loadAsync(envUrl),
         new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(modelUrl),
     ]);
 
@@ -334,7 +334,11 @@ async function init() {
         fallbackRenderer.render(fallbackScene, fallbackCamera);
         info.innerText = 'Samples: raster';
     });
-    pathTracer.setSize(WIDTH * renderParams.renderScale, HEIGHT * renderParams.renderScale);
+    pathTracer.setSize(
+        WIDTH,
+        HEIGHT,
+        window.devicePixelRatio * renderParams.renderScale
+    );
     pathTracer.setBounce(renderParams.bounceCount);
     pathTracer.setTransparentSteps(renderParams.transparentSteps);
     applySelectedDebugMode();
@@ -462,7 +466,11 @@ function event() {
         const { innerWidth, innerHeight } = window;
         pathTracer.camera.aspect = innerWidth / innerHeight;
         pathTracer.reset();
-        pathTracer.setSize(innerWidth * renderParams.renderScale, innerHeight * renderParams.renderScale);
+        pathTracer.setSize(
+            innerWidth,
+            innerHeight,
+            window.devicePixelRatio * renderParams.renderScale
+        );
         pathTracer.update();
     });
 

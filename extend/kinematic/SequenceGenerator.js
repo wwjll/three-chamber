@@ -915,7 +915,7 @@ class SequenceGenerator {
         this.params.visualizationVisible = visible;
         if (this._transformControls) {
             this._transformControls.enabled = this.params.visualizationVisible;
-            this._transformControls.visible = this.params.visualizationVisible;
+            this._transformControls.getHelper().visible = this.params.visualizationVisible;
         }
         if (this._targetMarker) {
             this._targetMarker.visible = this.params.visualizationVisible;
@@ -965,8 +965,8 @@ class SequenceGenerator {
         this._disposed = true;
         this._resizeObserver?.disconnect();
         this._transformControls?.detach();
+        this._transformControls?.getHelper().removeFromParent();
         this._transformControls?.dispose();
-        this._transformControls?.removeFromParent();
         this._disposeMarkerGroup();
         this._markerGroup?.removeFromParent();
         if (this._targetMarker) {
@@ -1378,7 +1378,7 @@ class SequenceGenerator {
         this._transformControls.setSpace('world');
         this._transformControls.setSize(0.65);
         this._transformControls.attach(this.targetObject);
-        this.scene.add(this._transformControls);
+        this.scene.add(this._transformControls.getHelper());
         this._transformControls.addEventListener(
             'dragging-changed',
             (event) => {

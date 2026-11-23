@@ -148,8 +148,6 @@ async function main() {
   const titleMatch = markdown.match(/^#\s+(.+)$/m);
   const title = titleMatch ? titleMatch[1].trim() : path.basename(inputPath, path.extname(inputPath));
 
-  // Markdown rendering is delegated to the community parser.
-  // This file only wraps the rendered fragment in a full HTML document.
   marked.setOptions({
     gfm: true,
     breaks: true

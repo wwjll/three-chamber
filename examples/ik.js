@@ -9,7 +9,7 @@ import {
     MeshBasicMaterial,
     MeshStandardMaterial,
     Object3D,
-    PCFSoftShadowMap,
+    PCFShadowMap,
     PerspectiveCamera,
     PlaneGeometry,
     Quaternion,
@@ -58,8 +58,8 @@ let solveCallCount = 0;
 const BG_COLOR = 0x242a2e;
 const FRAME_RATE = 60;
 const DEFAULT_EXPOSURE = 1.2;
-const KUKA_MODEL_URL = `${getAssetURL()}models/kuka-kr5/visual/`;
-const UR3E_MODEL_URL = `${getAssetURL()}models/ur3e/visual/`;
+const KUKA_MODEL_URL = `${getAssetURL()}models/robots/kuka-kr5/visual/`;
+const UR3E_MODEL_URL = `${getAssetURL()}models/robots/ur3e/visual/`;
 const renderLoop = getRenderLoopController();
 const modelRigEntries = new Map();
 
@@ -177,7 +177,7 @@ function init() {
     renderer.toneMapping = ACESFilmicToneMapping;
     renderer.toneMappingExposure = DEFAULT_EXPOSURE;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = PCFSoftShadowMap;
+    renderer.shadowMap.type = PCFShadowMap;
     document.body.appendChild(renderer.domElement);
 
     controls = new OrbitControls(camera, renderer.domElement);
@@ -212,7 +212,6 @@ function init() {
         controls.enabled = !event.value;
         isDraggingTarget = event.value;
         if (!isDraggingTarget) {
-            // Default behavior: solve once after drag end (mouse up).
             queueSolveFromTarget();
         }
         renderLoop.requestRender();
@@ -482,7 +481,7 @@ function createActuator(scene, camera, domElement) {
     controls.setMode('translate');
     controls.setSpace('local');
     controls.attach(object);
-    scene.add(controls);
+    scene.add(controls.getHelper());
 
     return {
         object,

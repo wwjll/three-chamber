@@ -83,7 +83,6 @@ class RenderLoopController {
 
         const elapsedMs = nowMs - this._lastRenderTime;
         if (elapsedMs >= this._frameIntervalMs) {
-            // Catch up by N fixed steps; keep remainder for next tick.
             const frameSteps = Math.max(1, Math.floor(elapsedMs / this._frameIntervalMs));
             const steppedMs = frameSteps * this._frameIntervalMs;
             const deltaSec = steppedMs / 1000;

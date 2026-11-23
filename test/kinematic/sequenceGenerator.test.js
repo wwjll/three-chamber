@@ -292,17 +292,17 @@ test('SequenceGenerator renders trajectory independently from end controls', () 
         },
     });
     generator.addRecordedKeyframe({
-        position: [0.1, 0.2, 0.3],
+        position: [0, 0, 0],
         rotation: [0, 0, 0],
         chainPose: [0, 0, 0, 0, 0, 0],
     });
     generator.addRecordedKeyframe({
-        position: [0.2, 0.25, 0.35],
+        position: [1, 1, 0],
         rotation: [0, 0, 0],
         chainPose: [1, 0, 0, 0, 0, 0],
     });
     generator.addRecordedKeyframe({
-        position: [0.25, 0.3, 0.2],
+        position: [2, 4, 0],
         rotation: [0, 0, 0],
         chainPose: [2, 0, 0, 0, 0, 0],
     });
@@ -326,10 +326,14 @@ test('SequenceGenerator renders trajectory independently from end controls', () 
     const trajectory = trajectoryGroup.children.find(
         (child) => child.userData.sequenceTrajectory,
     );
-    const sampledCurves = trajectory.geometry.parameters.path.curves;
-    assert.equal(sampledCurves.length, 64);
-    assert.ok(Math.abs(sampledCurves[15].v2.x - 0.5) < 1e-12);
-    assert.ok(Math.abs(sampledCurves[15].v2.y - 0.25) < 1e-12);
+    const trajectoryPoints = trajectory.geometry.parameters.path.getPoints();
+    assert.deepEqual(trajectoryPoints[0].toArray(), [0, 0, 0]);
+    assert.deepEqual(trajectoryPoints.at(-1).toArray(), [2, 4, 0]);
+    assert.ok(trajectoryPoints.some(({ x }) => x > 0 && x < 1));
+    assert.ok(trajectoryPoints.some(({ x }) => x > 1 && x < 2));
+    for (const { x, y } of trajectoryPoints) {
+        assert.ok(Math.abs(y - x * x) < 1e-12);
+    }
 
     const samplesBeforeSelection = sampleCount;
     generator.selectKeyframe(0, { preview: false });
@@ -340,11 +344,14 @@ test('SequenceGenerator renders trajectory independently from end controls', () 
         trajectory,
     );
     assert.equal(sampleCount, samplesBeforeSelection);
-    const markers = trajectoryGroup.children.filter(
-        (child) => child.userData.sequenceKeyframeMarker,
-    );
-    assert.equal(markers[0].material.color.getHex(), 0xffd166);
-    assert.equal(markers[2].material.color.getHex(), 0x62d4a8);
+    const markerColors = () => trajectoryGroup.children
+        .filter((child) => child.userData.sequenceKeyframeMarker)
+        .map((marker) => marker.material.color.getHex());
+    const [selectedColor, unselectedColor] = markerColors();
+    assert.notEqual(selectedColor, unselectedColor);
+    assert.deepEqual(markerColors(), [selectedColor, unselectedColor, unselectedColor]);
+    generator.selectKeyframe(2, { preview: false });
+    assert.deepEqual(markerColors(), [unselectedColor, unselectedColor, selectedColor]);
 
     generator.setVisualizationVisible(false);
     assert.equal(trajectoryGroup.visible, true);

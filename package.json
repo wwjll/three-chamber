@@ -8,17 +8,22 @@
     "build-pages": "pnpm run build-examples && node extend/tools/buildPages.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "test": "node --test test/*/*.test.js",
     "test:kinematic": "node --test test/kinematic/*.test.js test/tools/*.test.js",
     "test:path-tracing": "node --test test/path-tracing/*.test.js"
   },
   "author": "wwjll",
   "license": "ISC",
+  "packageManager": "pnpm@11.22.0",
+  "@parcel/resolver-default": {
+    "packageExports": true
+  },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",
     "@tweenjs/tween.js": "21.1.1",
     "marked": "^16.3.0",
     "parcel": "^2.14.0",
-    "three": "^0.160.0",
+    "three": "^0.187.0",
     "tweakpane": "^4.0.5"
   },
   "devDependencies": {

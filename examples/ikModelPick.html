@@ -36,7 +36,7 @@
         .tool-dock {
             position: fixed;
             z-index: 40;
-            left: 12px;
+            right: 12px;
             top: calc((100vh - var(--sequence-editor-height, 0px)) / 2);
             display: flex;
             flex-direction: column;
@@ -71,7 +71,7 @@
         .tool-dock__button.is-active::after {
             position: absolute;
             top: 12px;
-            left: -11px;
+            right: -11px;
             width: 3px;
             height: 18px;
             content: '';
@@ -168,9 +168,10 @@
         .tool-panel {
             position: fixed;
             z-index: 39;
-            left: 76px;
+            right: 76px;
             top: 12px;
-            width: 220px;
+            width: min(246px, calc(100vw - 88px));
+            box-sizing: border-box;
             padding: 12px;
             color: #dce5eb;
             background: rgba(24, 29, 33, 0.96);

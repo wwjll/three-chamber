@@ -12,6 +12,19 @@ const style = {
     linkRadius: 0.01,
 };
 
+test('base alignment changes reach the actuator before the next render', () => {
+    const chain = new Chain(new Scene());
+    chain.update([[0, 0, 1, 0]], style, { mdhMode: false });
+    const position = new Vector3();
+    assert.deepEqual(chain.getActuatorWorldPosition(position).toArray(), [1, 0, 0]);
+
+    chain.syncAxis({ syncUp: true }, { y: 2, z: 3 });
+    assert.deepEqual(chain.getActuatorWorldPosition(position).toArray(), [1, 3, -2]);
+
+    chain.syncAxis({ syncUp: false }, { x: 4, y: 5, z: 6 });
+    assert.deepEqual(chain.getActuatorWorldPosition(position).toArray(), [5, 5, 6]);
+});
+
 for (const mdhMode of [false, true]) {
     test(`${mdhMode ? 'MDH' : 'DH'} preserves joint offsets across pose updates`, () => {
         const chain = new Chain(new Scene());

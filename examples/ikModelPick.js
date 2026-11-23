@@ -15,7 +15,7 @@ import {
     MeshBasicMaterial,
     MeshStandardMaterial,
     Object3D,
-    PCFSoftShadowMap,
+    PCFShadowMap,
     PerspectiveCamera,
     PlaneGeometry,
     Quaternion,
@@ -42,6 +42,7 @@ import {
 } from '../extend/kinematic/ChainController.js';
 import { SequencePlayer } from '../extend/kinematic/SequencePlayer.js';
 import {
+    CLOSE_ACTION,
     HOLD_ACTION,
     OPEN_ACTION,
     SequenceGenerator,
@@ -50,11 +51,6 @@ import { IndexedDbSequenceStore } from '../extend/kinematic/SequenceStore.js';
 import { createUr3eRobotiqRig } from '../extend/kinematic/Ur3eRobotiqRig.js';
 import { SimulationClock } from '../extend/tools/SimulationClock.js';
 import { getAssetURL, getRenderLoopController } from '../extend/tools/Tool.js';
-import {
-    createPickAndReturnSequence,
-    createTrajectoryPreviewSequence,
-    DYNAMIC_CUBE_TARGET_KIND,
-} from './ikModelPickSequence.js';
 
 let scene, camera, renderer, controls;
 let chain, actuator, robotRig, sequencePlayer, sequenceGenerator;
@@ -88,8 +84,6 @@ const CUBE_SIZE = 0.028;
 const PAD_APPROACH_HALF_LENGTH = 0.0375 * 0.5;
 const TABLE_CLEARANCE = 0.004;
 const DEFAULT_Q_SEED = [0, -78, 102, -114, -90, 0].map(MathUtils.degToRad);
-const UR3E_MODEL_URL = `${getAssetURL()}models/ur3e/visual/`;
-const GRIPPER_MODEL_URL = `${getAssetURL()}models/robotiq-2f-85/visual/`;
 const renderLoop = getRenderLoopController();
 const simulationClock = new SimulationClock();
 const pickRaycaster = new Raycaster();
@@ -157,6 +151,7 @@ const moveParams = {
 
 const PLAYBACK_MODE_PREVIEW = 'trajectoryPreview';
 const PLAYBACK_MODE_PICK = 'pickAndReturn';
+const DYNAMIC_CUBE_TARGET_KIND = 'ikModelPickCubeTarget';
 
 function getSolverMode() {
     return solverParams.constrainOrientation
@@ -268,11 +263,13 @@ const debugParams = {
     showTrajectory: true,
 };
 
-init().catch((error) => {
-    console.error('[IK Model Pick] init failed:', error);
-    setLoadingState('Unable to initialize IK Model Pick.');
-    setStatus('Initialization failed');
-});
+if (typeof window !== 'undefined') {
+    init().catch((error) => {
+        console.error('[IK Model Pick] init failed:', error);
+        setLoadingState('Unable to initialize IK Model Pick.');
+        setStatus('Initialization failed');
+    });
+}
 
 async function init() {
     scene = new Scene();
@@ -288,7 +285,7 @@ async function init() {
     renderer.toneMapping = ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.2;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = PCFSoftShadowMap;
+    renderer.shadowMap.type = PCFShadowMap;
     document.body.appendChild(renderer.domElement);
 
     controls = new OrbitControls(camera, renderer.domElement);
@@ -723,10 +720,11 @@ function createKinematicChain() {
 }
 
 function createRobotRig() {
+    const assetUrl = getAssetURL();
     robotRig = createUr3eRobotiqRig({
         parent: scene,
-        ur3eAssetUrl: UR3E_MODEL_URL,
-        gripperAssetUrl: GRIPPER_MODEL_URL,
+        ur3eAssetUrl: `${assetUrl}models/robots/ur3e/visual/`,
+        gripperAssetUrl: `${assetUrl}models/robots/robotiq-2f-85/visual/`,
         // Match the 2F-85 +Z approach axis to the actuator +X axis after toolEuler.y = -90°.
         gripperRootTransform: {
             rpy: [0, Math.PI / 2, 0],
@@ -1481,6 +1479,97 @@ function createPickContext(cubeItem) {
     };
 }
 
+function cloneSequenceStep(step) {
+    return {
+        ...step,
+        target: step.target ? { ...step.target } : undefined,
+    };
+}
+
+export function createTrajectoryPreviewSequence(sequence) {
+    return {
+        ...sequence,
+        name: `${sequence.name}-preview`,
+        steps: sequence.steps
+            .filter((step) => step.type !== 'grip')
+            .map(cloneSequenceStep),
+    };
+}
+
+export function createCubePickAndReturnSequence(sequence, { currentChainPose, gripDurationMs }) {
+    const forwardSteps = sequence.steps.map(cloneSequenceStep);
+    const recordedPoseSteps = forwardSteps.filter(
+        (step) => (
+            step.keyframeId
+            && step.keyframeKind === 'recorded'
+            && step.type === 'joint'
+        ),
+    );
+    if (recordedPoseSteps.length === 0) {
+        return null;
+    }
+    // Rejoin the recorded route using actual joints, not the editor selection.
+    let nearestIndex = 0;
+    let nearestDistance = Infinity;
+    recordedPoseSteps.forEach((step, index) => {
+        const distance = step.target.chainPose.reduce((sum, angle, joint) => (
+            sum + (angle - currentChainPose[joint]) ** 2
+        ), 0);
+        if (distance < nearestDistance) {
+            nearestIndex = index;
+            nearestDistance = distance;
+        }
+    });
+    // An exact keyframe pose can start with the preceding waypoint immediately.
+    const entryCount = nearestIndex + (nearestDistance <= 1e-12 ? 0 : 1);
+    const approachSteps = recordedPoseSteps.slice(0, entryCount).reverse().map((step) => ({
+        ...cloneSequenceStep(step),
+        id: `approach-${step.id}`,
+        approachStep: true,
+    }));
+    const returnSteps = recordedPoseSteps
+        .slice(0, -1)
+        .reverse()
+        .map((step) => ({
+            ...cloneSequenceStep(step),
+            id: `return-${step.id}`,
+            returnStep: true,
+        }));
+    return {
+        ...sequence,
+        name: `${sequence.name}-pick-and-return`,
+        steps: [
+            ...approachSteps,
+            {
+                id: 'dynamic-cube-target-pose',
+                type: 'move',
+                target: { kind: DYNAMIC_CUBE_TARGET_KIND },
+                durationMs: 500,
+                interpolation: 'smooth',
+                rotationInterpolation: 'eulerXYZ',
+                solveWhileLerping: true,
+                completion: 'solve',
+                dynamicCubeTarget: true,
+            },
+            {
+                id: 'dynamic-cube-target-hold',
+                type: 'wait',
+                durationMs: 80,
+                dynamicCubeTarget: true,
+            },
+            {
+                id: 'dynamic-cube-target-grip',
+                type: 'grip',
+                mode: CLOSE_ACTION,
+                durationMs: gripDurationMs,
+                dynamicCubeTarget: true,
+            },
+            ...forwardSteps,
+            ...returnSteps,
+        ],
+    };
+}
+
 function startTrajectoryPreview(_context, sequence) {
     if (sequencePlayer?.isActive()) {
         return false;
@@ -1502,7 +1591,7 @@ function startPickAndReturn(context) {
     if (!cubeItem || sequencePlayer?.isActive()) {
         return false;
     }
-    const sequence = createPickAndReturnSequence(
+    const sequence = createCubePickAndReturnSequence(
         sequenceGenerator.buildSequence(),
         { currentChainPose: sequencePlayer.getJointState(), gripDurationMs: moveParams.gripDurationMs },
     );

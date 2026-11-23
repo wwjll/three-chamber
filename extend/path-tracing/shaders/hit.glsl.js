@@ -78,7 +78,7 @@ const Hit =  /* glsl */`
     }
     
     void hitTriangles(int begin, int end, inout Ray ray, inout RayHit hit) {
-        // leaf size is 8, keep loop bound compile-time constant for driver compatibility.
+        // Keep the loop bound a compile-time constant for driver compatibility.
         for(int offset = 0; offset < MAX_TRIANGLES_PER_LEAF; ++offset) {
         int i = begin + offset;
         if(i > end) break;

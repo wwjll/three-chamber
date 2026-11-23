@@ -5,6 +5,66 @@ const Common =  /* glsl */`
     #define RUSSIAN_ROULETTE_START_DEPTH 3
     #define MAX_TRANSPARENT_SURFACE_STEPS ${maxTransparentSteps}
 
+    #define PATH_TERMINATION_NONE 0
+    #define PATH_TERMINATION_ENVIRONMENT 1
+    #define PATH_TERMINATION_MAX_DEPTH 2
+    #define PATH_TERMINATION_INVALID_BSDF 3
+    #define PATH_TERMINATION_ZERO_THROUGHPUT 4
+    #define PATH_TERMINATION_RUSSIAN_ROULETTE 5
+    #define PATH_TERMINATION_NON_FINITE 6
+
+    #define PATH_FAILURE_RAY uint(1)
+    #define PATH_FAILURE_SURFACE uint(2)
+    #define PATH_FAILURE_BSDF uint(4)
+    #define PATH_FAILURE_PDF uint(8)
+    #define PATH_FAILURE_THROUGHPUT uint(16)
+    #define PATH_FAILURE_CONTRIBUTION uint(32)
+    #define PATH_FAILURE_RADIANCE uint(64)
+    #define PATH_FAILURE_EXTREME uint(128)
+
+    bool isFiniteFloat(float value) {
+        return !isnan(value) && !isinf(value);
+    }
+
+    bool isFiniteVec2(vec2 value) {
+        return all(not(isnan(value))) && all(not(isinf(value)));
+    }
+
+    bool isFiniteVec3(vec3 value) {
+        return all(not(isnan(value))) && all(not(isinf(value)));
+    }
+
+    float maxComponent(vec3 value) {
+        return max(value.r, max(value.g, value.b));
+    }
+
+    PathDiagnostic createPathDiagnostic() {
+        return PathDiagnostic(0, PATH_TERMINATION_NONE, -1, uint(0), uint(0), 0.0, 1.0, 0.0);
+    }
+
+    void recordPathFailure(inout PathDiagnostic diagnostic, int bounce, uint flags) {
+        if(diagnostic.firstFailureBounce < 0) {
+            diagnostic.firstFailureBounce = bounce;
+        }
+        diagnostic.failureFlags |= flags;
+    }
+
+    void inspectPathValue(
+        inout PathDiagnostic diagnostic,
+        int bounce,
+        vec3 value,
+        uint nonFiniteFlag
+    ) {
+        if(!isFiniteVec3(value)) {
+            recordPathFailure(diagnostic, bounce, nonFiniteFlag);
+            diagnostic.terminationReason = PATH_TERMINATION_NON_FINITE;
+            return;
+        }
+        if(maxComponent(abs(value)) > diagnosticExtremeThreshold) {
+            recordPathFailure(diagnostic, bounce, PATH_FAILURE_EXTREME);
+        }
+    }
+
     vec3 materialIdDebugColor(float materialIndex) {
         float id = materialIndex + 1.0;
         return fract(vec3(id * 0.37, id * 0.61, id * 0.83));
@@ -162,10 +222,17 @@ const Common =  /* glsl */`
         return materialBase;
     }
 
-    vec3 pathTrace() {
+    vec3 pathTrace(out PathDiagnostic diagnostic) {
         Ray ray = createCameraRay();
         vec3 radiance = vec3(0.0);
         vec3 throughput = vec3(1.0);
+        diagnostic = createPathDiagnostic();
+
+        if(!isFiniteVec3(ray.origin) || !isFiniteVec3(ray.direction)) {
+            recordPathFailure(diagnostic, 0, PATH_FAILURE_RAY);
+            diagnostic.terminationReason = PATH_TERMINATION_NON_FINITE;
+            return radiance;
+        }
 
         // maxBounce is the number of scattering events. The extra terminal
         // intersection records environment or emissive radiance after the last event.
@@ -174,14 +241,41 @@ const Common =  /* glsl */`
                 break;
             }
             setRandomBounce(uint(depth));
+            diagnostic.pathLength = depth + 1;
 
             vec3 surfaceFilter = vec3(1.0);
             RayHit hit = traceScene(ray, surfaceFilter);
             throughput *= surfaceFilter;
+            inspectPathValue(diagnostic, depth, throughput, PATH_FAILURE_THROUGHPUT);
+            if(diagnostic.terminationReason == PATH_TERMINATION_NON_FINITE) {
+                break;
+            }
 
             if(!hit.isHit) {
                 LightSample environmentLight = EvaluateEnvironmentLight(ray);
-                radiance += throughput * environmentLight.radiance;
+                vec3 contribution = throughput * environmentLight.radiance;
+                diagnostic.maxContribution = max(diagnostic.maxContribution, maxComponent(abs(contribution)));
+                inspectPathValue(diagnostic, depth, contribution, PATH_FAILURE_CONTRIBUTION);
+                if(diagnostic.terminationReason == PATH_TERMINATION_NON_FINITE) {
+                    break;
+                }
+                radiance += contribution;
+                inspectPathValue(diagnostic, depth, radiance, PATH_FAILURE_RADIANCE);
+                diagnostic.terminationReason = diagnostic.terminationReason == PATH_TERMINATION_NONE
+                    ? PATH_TERMINATION_ENVIRONMENT
+                    : diagnostic.terminationReason;
+                break;
+            }
+
+            if(
+                !isFiniteFloat(hit.distance) ||
+                !isFiniteVec3(hit.position) ||
+                !isFiniteVec3(hit.normal) ||
+                !isFiniteVec3(hit.geometricNormal) ||
+                !isFiniteVec2(hit.uv)
+            ) {
+                recordPathFailure(diagnostic, depth, PATH_FAILURE_SURFACE);
+                diagnostic.terminationReason = PATH_TERMINATION_NON_FINITE;
                 break;
             }
 
@@ -195,8 +289,22 @@ const Common =  /* glsl */`
                 );
             }
 
-            radiance += throughput * EvaluateSurfaceEmission(hit);
+            vec3 emissionContribution = throughput * EvaluateSurfaceEmission(hit);
+            diagnostic.maxContribution = max(
+                diagnostic.maxContribution,
+                maxComponent(abs(emissionContribution))
+            );
+            inspectPathValue(diagnostic, depth, emissionContribution, PATH_FAILURE_CONTRIBUTION);
+            if(diagnostic.terminationReason == PATH_TERMINATION_NON_FINITE) {
+                break;
+            }
+            radiance += emissionContribution;
+            inspectPathValue(diagnostic, depth, radiance, PATH_FAILURE_RADIANCE);
+            if(diagnostic.terminationReason == PATH_TERMINATION_NON_FINITE) {
+                break;
+            }
             if(depth >= maxBounce) {
+                diagnostic.terminationReason = PATH_TERMINATION_MAX_DEPTH;
                 break;
             }
 
@@ -220,13 +328,35 @@ const Common =  /* glsl */`
                 bitangent,
                 hit.material
             );
+            diagnostic.lastBsdfEvent = bsdfSample.flags;
+            diagnostic.lastSamplePdf = bsdfSample.pdf;
+            if(
+                !isFiniteVec3(bsdfSample.direction) ||
+                !isFiniteVec3(bsdfSample.weight)
+            ) {
+                recordPathFailure(diagnostic, depth, PATH_FAILURE_BSDF);
+                diagnostic.terminationReason = PATH_TERMINATION_NON_FINITE;
+                break;
+            }
+            if(!isFiniteFloat(bsdfSample.pdf)) {
+                recordPathFailure(diagnostic, depth, PATH_FAILURE_PDF);
+                diagnostic.terminationReason = PATH_TERMINATION_NON_FINITE;
+                break;
+            }
             if(!bsdfSample.valid || dot(bsdfSample.direction, surfaceGeometricNormal) <= 0.0) {
+                diagnostic.terminationReason = PATH_TERMINATION_INVALID_BSDF;
                 break;
             }
             throughput *= bsdfSample.weight;
+            inspectPathValue(diagnostic, depth, throughput, PATH_FAILURE_THROUGHPUT);
+            if(diagnostic.terminationReason == PATH_TERMINATION_NON_FINITE) {
+                break;
+            }
 
-            float maxThroughput = max(throughput.r, max(throughput.g, throughput.b));
+            float maxThroughput = maxComponent(throughput);
+            diagnostic.maxThroughput = max(diagnostic.maxThroughput, maxThroughput);
             if(maxThroughput <= 0.0) {
+                diagnostic.terminationReason = PATH_TERMINATION_ZERO_THROUGHPUT;
                 break;
             }
 
@@ -234,9 +364,15 @@ const Common =  /* glsl */`
                 beginRandomDomain(RNG_DOMAIN_RUSSIAN_ROULETTE);
                 float survivalProb = min(maxThroughput, 0.95);
                 if(rand() >= survivalProb) {
+                    diagnostic.terminationReason = PATH_TERMINATION_RUSSIAN_ROULETTE;
                     break;
                 }
                 throughput /= survivalProb;
+                diagnostic.maxThroughput = max(diagnostic.maxThroughput, maxComponent(throughput));
+                inspectPathValue(diagnostic, depth, throughput, PATH_FAILURE_THROUGHPUT);
+                if(diagnostic.terminationReason == PATH_TERMINATION_NON_FINITE) {
+                    break;
+                }
             }
 
             ray.origin = hit.position + surfaceGeometricNormal * RAY_OFFSET_EPSILON;
@@ -245,12 +381,39 @@ const Common =  /* glsl */`
 
         return radiance;
     }
+
+    vec4 encodeDiagnosticSummary(PathDiagnostic diagnostic) {
+        return vec4(
+            float(diagnostic.pathLength),
+            float(diagnostic.terminationReason),
+            float(diagnostic.lastBsdfEvent),
+            float(diagnostic.firstFailureBounce)
+        );
+    }
+
+    vec4 encodeDiagnosticMetrics(PathDiagnostic diagnostic) {
+        return vec4(
+            diagnostic.lastSamplePdf,
+            diagnostic.maxThroughput,
+            diagnostic.maxContribution,
+            float(diagnostic.failureFlags)
+        );
+    }
     
     void main(void) {
     
         seed = updateSeed(samples);
         
-        vec3 sampleRadiance = pathTrace();
+        PathDiagnostic diagnostic;
+        vec3 sampleRadiance = pathTrace(diagnostic);
+        if(diagnosticOutput == 1) {
+            pc_fragColor = encodeDiagnosticSummary(diagnostic);
+            return;
+        }
+        if(diagnosticOutput == 2) {
+            pc_fragColor = encodeDiagnosticMetrics(diagnostic);
+            return;
+        }
         vec3 accumulatedRadiance = texelFetch(outTexture, ivec2(gl_FragCoord.xy), 0).rgb;
         float accumulationWeight = 1.0 / (1.0 + samples);
         pc_fragColor = vec4(mix(accumulatedRadiance, sampleRadiance, accumulationWeight), 1.0);

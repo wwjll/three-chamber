@@ -15,11 +15,11 @@
 
         #control-panel {
             position: fixed;
-            top: 0;
-            left: 0;
+            top: 8px;
+            right: 8px;
             z-index: 10;
-            width: min(256px, 100vw);
-            max-height: 100vh;
+            width: min(256px, calc(100vw - 16px));
+            max-height: calc(100vh - 16px);
             overflow: auto;
         }
 

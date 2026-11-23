@@ -53,7 +53,6 @@ function normalizeGeometryForEncoding(geometry) {
 
 class Triangle {
     constructor(v1, v2, v3, n1, n2, n3, uv1, uv2, uv3, materialIndex = 0) {
-        // positions normals and uvs
         this.p1 = v1;
         this.p2 = v2;
         this.p3 = v3;
@@ -257,21 +256,18 @@ class BVHBuilder {
         let Cost = Infinity;
         let Split = 0;
         let Axis = 0;
-        // let Split = Math.floor((left + right) / 2);
         for (let axis = 0; axis < 3; ++axis) {
             this.sortTrianglesByAxis(axis, left, right);
             let leftMin = [];
             let leftMax = [];
             let rightMin = [];
             let rightMax = [];
-            // initialize left and right aabb box pairs
             for (let i = 0; i < right - left + 1; ++i) {
                 leftMin.push(new Vector3(Infinity, Infinity, Infinity));
                 rightMin.push(new Vector3(Infinity, Infinity, Infinity));
                 leftMax.push(new Vector3(-Infinity, -Infinity, -Infinity));
                 rightMax.push(new Vector3(-Infinity, -Infinity, -Infinity));
             }
-            // calculate the all possible pair of leftAABB and rightAABB
             for (let i = left; i <= right; ++i) {
                 let t = this.triangles[i];
                 let bias = (i === left) ? 0 : 1;
@@ -293,7 +289,6 @@ class BVHBuilder {
 
             }
 
-            // calculate the cost by pre computed pair of left and right part
             let cost = Infinity;
             let split = left;
             for (let i = left; i <= right - 1; ++i) {
@@ -371,7 +366,6 @@ class BVHBuilder {
         node.left = this.buildRecursiveSAH(left, Split);
         node.right = this.buildRecursiveSAH(Split + 1, right);
 
-        // console.log(left, Split, right);
         return node.id;
     }
 
@@ -623,7 +617,6 @@ class SceneGenerator {
         let triangleArray = new Float32Array(texelWidth * texelHeight * 4);
         let stride = gpuSceneLayout.triangle.stride;
 
-        // Triangles Data Texture
         for (let i = 0; i < totalTriangles; ++i) {
             let triangle = triangles[i];
             let vp1 = triangle.p1;
@@ -636,49 +629,41 @@ class SceneGenerator {
             let vt2 = triangle.uv2;
             let vt3 = triangle.uv3;
 
-            //slot 0
             triangleArray[stride * i + 0] = vp1.x;
             triangleArray[stride * i + 1] = vp1.y;
             triangleArray[stride * i + 2] = vp1.z;
             triangleArray[stride * i + 3] = vp2.x;
 
-            //slot 1
             triangleArray[stride * i + 4] = vp2.y;
             triangleArray[stride * i + 5] = vp2.z;
             triangleArray[stride * i + 6] = vp3.x;
             triangleArray[stride * i + 7] = vp3.y;
 
-            //slot 2
             triangleArray[stride * i + 8] = vp3.z;
             triangleArray[stride * i + 9] = vn1.x;
             triangleArray[stride * i + 10] = vn1.y;
             triangleArray[stride * i + 11] = vn1.z;
 
-            //slot 3
             triangleArray[stride * i + 12] = vn2.x;
             triangleArray[stride * i + 13] = vn2.y;
             triangleArray[stride * i + 14] = vn2.z;
             triangleArray[stride * i + 15] = vn3.x;
 
-            //slot 4
             triangleArray[stride * i + 16] = vn3.y;
             triangleArray[stride * i + 17] = vn3.z;
             triangleArray[stride * i + 18] = vt1.x;
             triangleArray[stride * i + 19] = vt1.y;
 
-            //slot 5
             triangleArray[stride * i + 20] = vt2.x;
             triangleArray[stride * i + 21] = vt2.y;
             triangleArray[stride * i + 22] = vt3.x;
             triangleArray[stride * i + 23] = vt3.y;
 
-            //slot 6
             triangleArray[stride * i + 24] = triangle.materialIndex;
             triangleArray[stride * i + 25] = 0;
             triangleArray[stride * i + 26] = 0;
             triangleArray[stride * i + 27] = 0;
 
-            //slot 7
             triangleArray[stride * i + 28] = 0;
             triangleArray[stride * i + 29] = 0;
             triangleArray[stride * i + 30] = 0;
@@ -770,7 +755,6 @@ class SceneGenerator {
         materialDataTexture.needsUpdate = true;
         materialDataTexture.unpackAlignment = 8;
 
-        // BVH Datatexture
         const totalNodes = nodes.length;
         totalTexels = texelsPerBVHNode * totalNodes;
         texelHeight = Math.max(1, Math.ceil(totalTexels / texelWidth));
@@ -781,25 +765,21 @@ class SceneGenerator {
 
         for (let i = 0; i < totalNodes; ++i) {
             let node = nodes[i];
-            // slot 0
             nodesArray[i * stride] = node.aa.x;
             nodesArray[i * stride + 1] = node.aa.y;
             nodesArray[i * stride + 2] = node.aa.z;
             nodesArray[i * stride + 3] = node.bb.x;
 
-            // slot 1
             nodesArray[i * stride + 4] = node.bb.y;
             nodesArray[i * stride + 5] = node.bb.z;
             nodesArray[i * stride + 6] = node.id;
             nodesArray[i * stride + 7] = nodes[i].isLeaf ? 1 : 0;
 
-            // slot 2
             nodesArray[i * stride + 8] = node.left;
             nodesArray[i * stride + 9] = node.right;
             nodesArray[i * stride + 10] = node.index;
             nodesArray[i * stride + 11] = node.size;
 
-            // slot 3
             nodesArray[i * stride + 12] = 0;
             nodesArray[i * stride + 13] = 0;
             nodesArray[i * stride + 14] = 0;
@@ -807,7 +787,6 @@ class SceneGenerator {
 
         }
 
-        // write nodes data into texture
         const bvhDataTexture = new DataTexture(
             nodesArray,
             texelWidth,

@@ -1,4 +1,4 @@
-import { ClampToEdgeWrapping, Color, DataArrayTexture, FloatType, LinearFilter, LinearMipmapLinearFilter, Mesh, NearestFilter, NoColorSpace, OrthographicCamera, PlaneGeometry, RGBAFormat, RepeatWrapping, Scene, SRGBColorSpace, UnsignedByteType, Vector3, WebGLRenderTarget } from 'three';
+import { ClampToEdgeWrapping, Color, DataArrayTexture, FloatType, LinearFilter, LinearMipmapLinearFilter, Mesh, NearestFilter, NoColorSpace, OrthographicCamera, PlaneGeometry, RGBAFormat, RepeatWrapping, Scene, SRGBColorSpace, UnsignedByteType, Vector2, Vector3, WebGLRenderTarget } from 'three';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { OutputMaterial } from './materials/OutputMaterial.js'
 import { PathTracingMaterial } from './materials/PathTracingMaterial.js'
@@ -25,10 +25,23 @@ function* renderTask() {
         pathTracingMaterial.projectionMatrixInverse = camera.projectionMatrixInverse;
         pathTracingMaterial.outTexture = this.outRenderTarget.texture;
 
+        pathTracingMaterial.diagnosticOutput = 0;
         renderer.setRenderTarget(this.traceRenderTarget);
         renderer.render(traceScene, traceCamera);
 
         outputMaterial.renderTexture = this.traceRenderTarget.texture;
+
+        if (this.diagnosticMode !== 0) {
+            pathTracingMaterial.diagnosticOutput = 1;
+            renderer.setRenderTarget(this.diagnosticSummaryRenderTarget);
+            renderer.render(traceScene, traceCamera);
+
+            pathTracingMaterial.diagnosticOutput = 2;
+            renderer.setRenderTarget(this.diagnosticMetricsRenderTarget);
+            renderer.render(traceScene, traceCamera);
+
+            pathTracingMaterial.diagnosticOutput = 0;
+        }
 
         renderer.setRenderTarget(null);
         this.outputQuad.render(renderer);
@@ -147,7 +160,12 @@ class PathTracer {
         this.ready = false;
         this.disposed = false;
         this.cameraOrigin = new Vector3();
+        this.drawingBufferSize = new Vector2();
+        this.displayWidth = 0;
+        this.displayHeight = 0;
+        this.pixelRatio = 0;
         this.rasterFallbackRenderer = null;
+        this.diagnosticMode = 0;
         this.init();
     }
 
@@ -167,6 +185,20 @@ class PathTracer {
             minFilter: NearestFilter
         });
 
+        this.diagnosticSummaryRenderTarget = new WebGLRenderTarget(1, 1, {
+            format: RGBAFormat,
+            type: FloatType,
+            magFilter: NearestFilter,
+            minFilter: NearestFilter
+        });
+
+        this.diagnosticMetricsRenderTarget = new WebGLRenderTarget(1, 1, {
+            format: RGBAFormat,
+            type: FloatType,
+            magFilter: NearestFilter,
+            minFilter: NearestFilter
+        });
+
         this.pathTracingQuad = new Mesh(
             new PlaneGeometry(2, 2),
             new PathTracingMaterial()
@@ -180,20 +212,20 @@ class PathTracer {
 
         this.pathTracingMaterial = this.pathTracingQuad.material;
         this.outputMaterial = this.outputQuad.material;
+        this.outputMaterial.diagnosticSummaryTexture = this.diagnosticSummaryRenderTarget.texture;
+        this.outputMaterial.diagnosticMetricsTexture = this.diagnosticMetricsRenderTarget.texture;
 
         this._setConstants();
         this._setRenderTexture();
         this._setSceneTextureArrays();
     }
 
-    // set constants used inside shader
     _setConstants() {
         this.pathTracingMaterial.texelsPerTriangle = texelsPerTriangle;
         this.pathTracingMaterial.texelsPerBVHNode = texelsPerBVHNode;
         this.pathTracingMaterial.texelsPerMaterial = texelsPerMaterial;
     }
 
-    // set full screen textures during rendering
     _setRenderTexture() {
         this.pathTracingMaterial.outTexture = this.outRenderTarget.texture;
         this.outputMaterial.renderTexture = this.traceRenderTarget.texture;
@@ -261,16 +293,16 @@ class PathTracer {
         return this.renderer.capabilities.isWebGL2;
     }
 
-    // set bounces
     setBounce(maxBounce) {
-        this.pathTracingMaterial.maxBounce = Math.max(1, Math.min(maxBounce, maxPathBounces));
+        const bounceCount = Math.max(1, Math.min(maxBounce, maxPathBounces));
+        this.pathTracingMaterial.maxBounce = bounceCount;
+        this.outputMaterial.diagnosticMaxBounce = bounceCount;
     }
 
     setTransparentSteps(stepCount) {
         this.pathTracingMaterial.maxTransparentSteps = Math.max(1, Math.min(stepCount, maxTransparentSteps));
     }
 
-    // set hdr texture
     setHdrTexture(texture) {
         texture.minFilter = LinearFilter;
         texture.magFilter = LinearFilter;
@@ -280,6 +312,53 @@ class PathTracer {
 
     setDebugMode(mode) {
         this.pathTracingMaterial.debugMode = mode;
+    }
+
+    setDiagnosticMode(mode) {
+        this.diagnosticMode = mode;
+        this.outputMaterial.diagnosticMode = mode;
+    }
+
+    setDiagnosticExtremeThreshold(threshold) {
+        this.pathTracingMaterial.diagnosticExtremeThreshold = threshold;
+    }
+
+    readDiagnosticPixel(x, y) {
+        const width = this.diagnosticSummaryRenderTarget.width;
+        const height = this.diagnosticSummaryRenderTarget.height;
+        const pixelX = Math.max(0, Math.min(Math.floor(x), width - 1));
+        const pixelY = Math.max(0, Math.min(Math.floor(y), height - 1));
+        const summary = new Float32Array(4);
+        const metrics = new Float32Array(4);
+
+        this.renderer.readRenderTargetPixels(
+            this.diagnosticSummaryRenderTarget,
+            pixelX,
+            pixelY,
+            1,
+            1,
+            summary
+        );
+        this.renderer.readRenderTargetPixels(
+            this.diagnosticMetricsRenderTarget,
+            pixelX,
+            pixelY,
+            1,
+            1,
+            metrics
+        );
+
+        return {
+            pixel: { x: pixelX, y: pixelY },
+            pathLength: Math.round(summary[0]),
+            terminationReason: Math.round(summary[1]),
+            bsdfEventFlags: Math.round(summary[2]),
+            firstFailureBounce: Math.round(summary[3]),
+            samplePdf: metrics[0],
+            maxThroughput: metrics[1],
+            maxContribution: metrics[2],
+            failureFlags: Math.round(metrics[3]),
+        };
     }
 
     setMaterialPreset(preset) {
@@ -306,7 +385,6 @@ class PathTracer {
         );
     }
 
-    // set Data texture
     setDataTexture(triangle, bvh, material) {
         const pathTracingMaterial = this.pathTracingMaterial;
         pathTracingMaterial.triangleDataTexture = triangle.dataTexture;
@@ -338,19 +416,34 @@ class PathTracer {
         this.ready = true;
     }
 
-    setSize(width, height) {
-        width = ~~width;
-        height = ~~height;
+    setSize(width, height, pixelRatio = this.renderer.getPixelRatio()) {
+        const displayWidth = Math.max(1, Math.floor(width));
+        const displayHeight = Math.max(1, Math.floor(height));
 
-        if (this.traceRenderTarget.width === width && this.traceRenderTarget.height === height) {
+        if (
+            this.displayWidth === displayWidth
+            && this.displayHeight === displayHeight
+            && this.pixelRatio === pixelRatio
+        ) {
             return;
         }
 
-        this.renderer.setSize(width, height);
-        this.traceRenderTarget.setSize(width, height);
-        this.outRenderTarget.setSize(width, height);
+        this.displayWidth = displayWidth;
+        this.displayHeight = displayHeight;
+        this.pixelRatio = pixelRatio;
+        this.renderer.setPixelRatio(pixelRatio);
+        this.renderer.setSize(displayWidth, displayHeight);
+        this.renderer.getDrawingBufferSize(this.drawingBufferSize);
 
-        this.pathTracingMaterial.resolution = { x: width, y: height };
+        const renderWidth = Math.floor(this.drawingBufferSize.x);
+        const renderHeight = Math.floor(this.drawingBufferSize.y);
+        this.traceRenderTarget.setSize(renderWidth, renderHeight);
+        this.outRenderTarget.setSize(renderWidth, renderHeight);
+        this.diagnosticSummaryRenderTarget.setSize(renderWidth, renderHeight);
+        this.diagnosticMetricsRenderTarget.setSize(renderWidth, renderHeight);
+
+        this.pathTracingMaterial.resolution = { x: renderWidth, y: renderHeight };
+        this.outputMaterial.diagnosticMaxBounce = this.pathTracingMaterial.maxBounce;
     }
 
     update() {
@@ -408,6 +501,12 @@ class PathTracer {
         this.renderer.setRenderTarget(this.outRenderTarget);
         this.renderer.clear();
 
+        this.renderer.setRenderTarget(this.diagnosticSummaryRenderTarget);
+        this.renderer.clear();
+
+        this.renderer.setRenderTarget(this.diagnosticMetricsRenderTarget);
+        this.renderer.clear();
+
         this.renderer.setClearColor(clearColor, clearAlpha);
         this.renderer.setRenderTarget(currentRenderTarget);
     }
@@ -430,6 +529,8 @@ class PathTracer {
         this.outputQuad.dispose();
         this.traceRenderTarget.dispose();
         this.outRenderTarget.dispose();
+        this.diagnosticSummaryRenderTarget.dispose();
+        this.diagnosticMetricsRenderTarget.dispose();
     }
 
 }

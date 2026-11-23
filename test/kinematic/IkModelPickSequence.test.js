@@ -3,9 +3,9 @@ import test from 'node:test';
 import { Object3D } from 'three';
 import { SequencePlayer } from '../../extend/kinematic/SequencePlayer.js';
 import {
-    createPickAndReturnSequence,
+    createCubePickAndReturnSequence,
     createTrajectoryPreviewSequence,
-} from '../../examples/ikModelPickSequence.js';
+} from '../../examples/ikModelPick.js';
 
 function recordedSequence() {
     return {
@@ -36,7 +36,7 @@ for (const [label, current, expected] of [
     test(`Pick sequence rejoins the route from the ${label} before targeting a cube`, () => {
         const source = recordedSequence();
         const snapshot = structuredClone(source);
-        const sequence = createPickAndReturnSequence(source, {
+        const sequence = createCubePickAndReturnSequence(source, {
             currentChainPose: [current], gripDurationMs: 450,
         });
         const firstCubeStep = sequence.steps.findIndex((step) => step.dynamicCubeTarget);
@@ -51,7 +51,7 @@ for (const [label, current, expected] of [
 }
 
 test('Pick sequence refuses to target a cube without a recorded joint route', () => {
-    assert.equal(createPickAndReturnSequence({ name: 'empty', steps: [] }, {
+    assert.equal(createCubePickAndReturnSequence({ name: 'empty', steps: [] }, {
         currentChainPose: [0], gripDurationMs: 450,
     }), null);
 });
@@ -78,7 +78,7 @@ test('Pick startup plays intermediate joints before resolving the dynamic cube t
         },
     });
     player.queueSolveFromTarget();
-    player.loadSequence(createPickAndReturnSequence(recordedSequence(), {
+    player.loadSequence(createCubePickAndReturnSequence(recordedSequence(), {
         currentChainPose: player.getJointState(), gripDurationMs: 450,
     }));
     assert.equal(player.startPickSequence({}), true);

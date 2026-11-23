@@ -163,3 +163,4 @@ Agent.md
 .env
 .env.local
 .env.*.local
+.alma-snapshots

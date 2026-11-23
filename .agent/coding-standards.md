@@ -36,3 +36,14 @@
 - Keep features and abstractions small enough to understand and experiment with.
 - Avoid detailed production engineering systems unless explicitly requested;
   add only what the prototype needs to demonstrate its behavior.
+
+## WSL Workspace Links
+
+- When the repository is opened through a Windows-hosted Codex workspace backed
+  by WSL, use Windows UNC paths for clickable file links in responses, for
+  example: `\\wsl$\Ubuntu-26.04\home\user\project\src\file.js`.
+- Do not use WSL-internal paths such as `/home/user/project/src/file.js` as
+  clickable links in the Windows desktop app; the host-side link resolver may
+  report that the file does not exist.
+- Linux paths remain appropriate for commands executed inside WSL. This rule
+  applies specifically to user-facing file links resolved by the Windows app.

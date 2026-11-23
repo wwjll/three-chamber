@@ -1,4 +1,3 @@
-/** A bounded fixed-step clock shared by animation and physics. */
 class SimulationClock {
     constructor({ stepSeconds = 1 / 60, maxSubsteps = 8 } = {}) {
         if (!Number.isFinite(stepSeconds) || stepSeconds <= 0
@@ -15,7 +14,6 @@ class SimulationClock {
         if (!Number.isFinite(deltaSeconds) || deltaSeconds < 0) {
             throw new RangeError('Frame delta must be finite and nonnegative.');
         }
-        // Drop excess wall time for every simulation consumer together.
         this._accumulator += Math.min(
             deltaSeconds, this.stepSeconds * this.maxSubsteps,
         );

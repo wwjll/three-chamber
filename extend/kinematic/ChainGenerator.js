@@ -65,6 +65,7 @@ function alignBaseMatrix(container, offset = {}) {
     const translation = new Matrix4().makeTranslation(tx, ty, tz);
     container.matrixAutoUpdate = false;
     container.matrix.copy(align).multiply(translation);
+    container.matrixWorldNeedsUpdate = true;
 }
 
 function convertMDH(params) {
@@ -455,17 +456,20 @@ class ChainGenerator {
     }
 
     static syncBase(chainOwner, styleParams = {}, baseOffset = {}) {
-        if (!chainOwner?.robotContainer) return;
+        const container = chainOwner?.robotContainer;
+        if (!container) return;
         if (styleParams.syncUp) {
-            alignBaseMatrix(chainOwner.robotContainer, baseOffset);
+            alignBaseMatrix(container, baseOffset);
         } else {
-            chainOwner.robotContainer.matrixAutoUpdate = false;
-            chainOwner.robotContainer.matrix.identity();
+            container.matrixAutoUpdate = false;
+            container.matrix.identity();
             const tx = baseOffset.x ?? 0;
             const ty = baseOffset.y ?? 0;
             const tz = baseOffset.z ?? 0;
-            chainOwner.robotContainer.matrix.setPosition(tx, ty, tz);
+            container.matrix.setPosition(tx, ty, tz);
+            container.matrixWorldNeedsUpdate = true;
         }
+        container.updateWorldMatrix(true, true);
     }
 }
 

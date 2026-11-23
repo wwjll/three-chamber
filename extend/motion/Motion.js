@@ -1,4 +1,4 @@
-import * as TWEEN from '@tweenjs/tween.js/dist/tween.esm.js';
+import * as TWEEN from '@tweenjs/tween.js';
 
 const DEFAULT_CONFIG = {
     distance: 1000,
@@ -40,16 +40,6 @@ class TowerMotionController {
     }
 
     bindFloors(floors = [], floorNumbers = null) {
-        /*
-         * Expected floors input:
-         * - floors: Array<Object3D>, each item is one floor group.
-         * - floor.userData format (recommended):
-         *   - userData.name: string like "Floor.3" (used to infer floor number if floorNumbers is not provided).
-         *   - userData.originY: number, original Y position of this floor.
-         *   - userData.status: "normal" | "rised", current motion status.
-         *   - userData.progress: number in [0, 1], normalized animation progress.
-         * The controller will initialize/overwrite originY/status/progress to ensure deterministic animation state.
-         */
         this.floors = floors;
         this.floorNumbers = floorNumbers?.length > 0
             ? floorNumbers.slice()
@@ -141,7 +131,6 @@ class TowerMotionController {
                 const eased = easingEval(progress);
                 floor.position.y = originY + distance * eased;
 
-                // Apply per-floor weighted speed and clamp to [0, 1] normalized progress.
                 const nextProgress = Math.min(1, progress + progressStep * (0.4 + 2 * (index + 1) / length));
                 floor.userData.progress = nextProgress;
                 if (nextProgress >= 1) {

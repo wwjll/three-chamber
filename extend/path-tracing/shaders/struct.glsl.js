@@ -49,6 +49,17 @@ const Struct =  /* glsl */`
         uint flags;
         bool valid;
     };
+
+    struct PathDiagnostic {
+        int pathLength;
+        int terminationReason;
+        int firstFailureBounce;
+        uint failureFlags;
+        uint lastBsdfEvent;
+        float lastSamplePdf;
+        float maxThroughput;
+        float maxContribution;
+    };
     
     struct Ray {
         vec3 origin;

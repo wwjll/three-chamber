@@ -17,10 +17,6 @@ import { Hit } from '../../extend/path-tracing/shaders/hit.glsl.js';
 import { Light } from '../../extend/path-tracing/shaders/light.glsl.js';
 import { Struct } from '../../extend/path-tracing/shaders/struct.glsl.js';
 
-/**
- * Build the smallest encoded scene needed to test SceneCompiler dependency
- * injection and CompiledScene ownership without real Three.js GPU resources.
- */
 function createEncodedScene(disposeCounts) {
     function createBuffer(key) {
         return {
@@ -45,14 +41,10 @@ function createEncodedScene(disposeCounts) {
 }
 
 test('GPU layout is internally consistent and generates shader limits', () => {
-    // Each DataTexture texel stores four floats, so the CPU stride must equal
-    // the texel count multiplied by four. A mismatch shifts all shader reads.
     assert.equal(gpuSceneLayout.triangle.stride, gpuSceneLayout.triangle.texels * 4);
     assert.equal(gpuSceneLayout.bvhNode.stride, gpuSceneLayout.bvhNode.texels * 4);
     assert.equal(gpuSceneLayout.material.stride, gpuSceneLayout.material.texels * 4);
 
-    // Constants.js, the encoder, and GLSL limits must derive from one layout so
-    // a CPU-side change cannot leave stale shader constants behind.
     assert.equal(texelsPerTriangle, gpuSceneLayout.triangle.texels);
     assert.equal(texelsPerBVHNode, gpuSceneLayout.bvhNode.texels);
     assert.equal(texelsPerMaterial, gpuSceneLayout.material.texels);
@@ -67,8 +59,6 @@ test('GPU layout is internally consistent and generates shader limits', () => {
 });
 
 test('SceneCompiler accepts an injected encoder and returns an owned CompiledScene', () => {
-    // The fake encoder records calls so option merging can be verified without
-    // running a real BVH build.
     const disposeCounts = {
         triangle: 0,
         bvh: 0,
@@ -98,8 +88,6 @@ test('SceneCompiler accepts an injected encoder and returns an owned CompiledSce
     assert.equal(compiledScene.layoutVersion, gpuSceneLayout.version);
     assert.equal(compiledScene.disposed, false);
 
-    // dispose() must be idempotent because scene switching and shutdown can
-    // reach cleanup more than once, while each GPU texture has one owner.
     compiledScene.dispose();
     compiledScene.dispose();
     assert.deepEqual(disposeCounts, {
@@ -110,8 +98,6 @@ test('SceneCompiler accepts an injected encoder and returns an owned CompiledSce
 });
 
 test('SceneCompiler normalizes mixed mesh attributes into finite GPU buffers', () => {
-    // Keep UVs on one mesh and remove them from another to reproduce mixed
-    // attribute sets. The compiler must add defaults and normalize to Float32.
     const scene = new Scene();
     const material = new MeshStandardMaterial();
     const geometryWithUv = new PlaneGeometry(1, 1);
@@ -125,8 +111,6 @@ test('SceneCompiler normalizes mixed mesh attributes into finite GPU buffers', (
 
     const compiledScene = new SceneCompiler().compile(scene);
 
-    // NaN or Infinity in a DataTexture propagates through normals, BSDFs, and
-    // throughput, eventually appearing as black regions, flicker, or fireflies.
     for (const buffer of [
         compiledScene.triangle,
         compiledScene.bvh,
@@ -145,9 +129,6 @@ test('SceneCompiler normalizes mixed mesh attributes into finite GPU buffers', (
 });
 
 test('light evaluation is behind a stable shader contract', () => {
-    // The pure-BSDF integrator currently evaluates environment and emissive
-    // light. This boundary lets future NEE/MIS work extend the light module
-    // without rewriting the path loop.
     assert.match(Struct, /struct LightSample/);
     assert.match(Light, /LightSample EvaluateEnvironmentLight/);
     assert.match(Light, /vec3 EvaluateSurfaceEmission/);

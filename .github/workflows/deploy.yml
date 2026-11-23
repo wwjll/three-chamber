@@ -11,15 +11,17 @@ env:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: github-pages
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      pages: read
     runs-on: ubuntu-latest
 
     steps:
@@ -28,17 +30,21 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
-          
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Test
+        run: pnpm test
 
       # This script packages the GitHub Pages artifact from examples/bundle.
       - name: Build Pages site
@@ -53,6 +59,9 @@ jobs:
           path: ./examples/bundle
 
   deploy:
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

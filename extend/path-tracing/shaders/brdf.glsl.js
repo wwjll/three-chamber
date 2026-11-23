@@ -3,7 +3,7 @@ const Brdf =  /* glsl */`
     float SchlickFresnel(float u) {
         float m = clamp(1.0 - u, 0.0, 1.0);
         float m2 = m * m;
-        return m2 * m2 * m; // pow(m,5)
+        return m2 * m2 * m;
     }
     
     float GTR1(float NdotH, float a) {
@@ -34,7 +34,7 @@ const Brdf =  /* glsl */`
         return 1.0 / (NdotV + sqrt(sqr(VdotX * ax) + sqr(VdotY * ay) + sqr(NdotV)));
     }
 
-    float luminance(vec3 color) {
+    float bsdfLuminance(vec3 color) {
         return dot(color, vec3(0.2126, 0.7152, 0.0722));
     }
 
@@ -71,8 +71,8 @@ const Brdf =  /* glsl */`
 
     float BSDFSpecularSampleWeight(in Material material) {
         vec3 f0 = BSDF_F0(material);
-        float diffuseWeight = (1.0 - material.metallic) * max(luminance(material.baseColor), 0.001);
-        float specularWeight = max(luminance(f0), 0.001);
+        float diffuseWeight = (1.0 - material.metallic) * max(bsdfLuminance(material.baseColor), 0.001);
+        float specularWeight = max(bsdfLuminance(f0), 0.001);
         return clamp(specularWeight / (diffuseWeight + specularWeight), 0.05, 0.95);
     }
 
@@ -100,7 +100,6 @@ const Brdf =  /* glsl */`
         float NdotH = dot(N, H);
         float LdotH = dot(L, H);
     
-        // albedo
         vec3 Cdlin = material.baseColor;
         float Cdlum = 0.3 * Cdlin.r + 0.6 * Cdlin.g + 0.1 * Cdlin.b;
         vec3 Ctint = (Cdlum > 0.0) ? (Cdlin / Cdlum) : (vec3(1.0));
@@ -108,18 +107,15 @@ const Brdf =  /* glsl */`
         vec3 Cspec0 = mix(0.08 * Cspec, Cdlin, material.metallic); 
         vec3 Csheen = mix(vec3(1.0), Ctint, material.sheenTint);   
     
-        // diffuse
         float Fd90 = 0.5 + 2.0 * LdotH * LdotH * material.roughness;
         float FL = SchlickFresnel(NdotL);
         float FV = SchlickFresnel(NdotV);
         float Fd = mix(1.0, Fd90, FL) * mix(1.0, Fd90, FV);
     
-        // subsurface scattering
         float Fss90 = LdotH * LdotH * material.roughness;
         float Fss = mix(1.0, Fss90, FL) * mix(1.0, Fss90, FV);
         float ss = 1.25 * (Fss * (1.0 / max(NdotL + NdotV, EPSILON) - 0.5) + 0.5);
     
-        // specular -- uniso
         float alpha = max(material.roughness * material.roughness, 0.001);
         float Ds = GTR2(NdotH, alpha);
         float FH = SchlickFresnel(LdotH);
@@ -127,22 +123,10 @@ const Brdf =  /* glsl */`
         float Gs = smithG_GGX(NdotL, material.roughness);
         Gs *= smithG_GGX(NdotV, material.roughness);
     
-        // specular -- aniso
-        // float aspect = sqrt(1.0 - material.anisotropic * 0.9);
-        // float ax = max(0.001, sqr(material.roughness) / aspect);
-        // float ay = max(0.001, sqr(material.roughness) * aspect);
-        // float Ds = GTR2_aniso(NdotH, dot(H, X), dot(H, Y), ax, ay);
-        // float FH = SchlickFresnel(LdotH);
-        // vec3 Fs = mix(Cspec0, vec3(1), FH);
-        // float Gs;
-        // Gs = smithG_GGX_aniso(NdotL, dot(L, X), dot(L, Y), ax, ay);
-        // Gs *= smithG_GGX_aniso(NdotV, dot(V, X), dot(V, Y), ax, ay);
-    
         float Dr = GTR1(NdotH, mix(0.1, 0.001, material.clearcoatGloss));
         float Fr = mix(0.04, 1.0, FH);
         float Gr = smithG_GGX(NdotL, 0.25) * smithG_GGX(NdotV, 0.25);
     
-        // sheen
         vec3 Fsheen = FH * material.sheen * Csheen;
     
         vec3 diffuse = (1.0 / PI) * mix(Fd, ss, material.subsurface) * Cdlin + Fsheen;

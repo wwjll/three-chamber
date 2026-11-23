@@ -8,7 +8,7 @@ import {
     MathUtils,
     Mesh,
     MeshStandardMaterial,
-    PCFSoftShadowMap,
+    PCFShadowMap,
     PerspectiveCamera,
     PlaneGeometry,
     Scene,
@@ -212,7 +212,6 @@ function rebuildSegmentsFromArray(paramArray) {
 }
 
 function convertAxisLimitsToDh(segment) {
-    // Convert axis-space limits to DH-space limits.
     // Wrap intervals (min > max) are preserved so DOF helper and solver share semantics.
     const axisSign = segment.axisSign === -1 ? -1 : 1;
     const thetaOffsetDeg = segment.thetaOffset ?? 0;
@@ -333,7 +332,7 @@ function init() {
     renderer.toneMapping = ACESFilmicToneMapping;
     renderer.toneMappingExposure = DEFAULT_EXPOSURE;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = PCFSoftShadowMap;
+    renderer.shadowMap.type = PCFShadowMap;
     document.body.appendChild(renderer.domElement);
 
     controls = new OrbitControls(camera, renderer.domElement);

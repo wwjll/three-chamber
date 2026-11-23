@@ -48,6 +48,8 @@ class PathTracingMaterial extends MaterialBase {
                 sceneEmissiveTextureArray: { type: 't', value: null },
                 materialPreset: { type: "i", value: 0 },
                 debugMode: { type: "i", value: 0 },
+                diagnosticOutput: { type: "i", value: 0 },
+                diagnosticExtremeThreshold: { type: "f", value: 100.0 },
                 hdrTexture: { type: "t", value: null },
                 maxTransparentSteps: { type: "i", value: 2 },
             },
@@ -96,6 +98,8 @@ class PathTracingMaterial extends MaterialBase {
                 uniform highp sampler2DArray sceneEmissiveTextureArray;
                 uniform int materialPreset;
                 uniform int debugMode;
+                uniform int diagnosticOutput;
+                uniform float diagnosticExtremeThreshold;
                 uniform int maxTransparentSteps;
 
                 uniform float texelsPerTriangle;
