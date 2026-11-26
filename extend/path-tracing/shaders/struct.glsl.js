@@ -21,6 +21,8 @@ const Struct =  /* glsl */`
         float clearcoatGloss;
         float IOR;
         float transmission;
+        float thickness;
+        vec3 absorption;
         float albedoTextureIndex;
         float normalTextureIndex;
         float metallicRoughnessTextureIndex;
@@ -84,8 +86,7 @@ const Struct =  /* glsl */`
     struct BVHNode {
         vec3 aa;
         vec3 bb;
-        int isLeaf;
-        int left;
+        bool isLeaf;
         int right;
         int index;
         int size;

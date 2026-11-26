@@ -1,0 +1,134 @@
+<html lang="en">
+
+<head>
+    <title>BVH compare</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1" />
+    <style>
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            color: #e8edf5;
+            background: #11141a;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        .slot-label {
+            position: absolute;
+            max-width: 340px;
+            padding: 6px 8px;
+            box-sizing: border-box;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 6px;
+            background: rgba(12, 15, 20, 0.78);
+            font-size: 11px;
+            line-height: 1.4;
+            white-space: pre;
+            pointer-events: none;
+        }
+
+        .slot-label .name {
+            color: #8ed7ff;
+            cursor: pointer;
+            pointer-events: auto;
+            user-select: none;
+        }
+
+        .slot-label .depth-legend {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 4px;
+        }
+
+        .slot-label .depth-legend[hidden] {
+            display: none;
+        }
+
+        .slot-label .depth-legend .bar {
+            flex: 1;
+            min-width: 96px;
+            height: 8px;
+            border-radius: 2px;
+        }
+
+        .slot-label.mismatch {
+            border-color: #ff5d5d;
+            background: rgba(70, 14, 18, 0.85);
+        }
+
+        .slot-frame {
+            position: absolute;
+            box-sizing: border-box;
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            pointer-events: none;
+        }
+
+        .slot-frame.wipe {
+            border-color: transparent;
+        }
+
+        .slot-frame.selected {
+            border: 2px solid #8ed7ff;
+        }
+
+        #divider {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 14px;
+            margin-left: -7px;
+            display: none;
+            cursor: ew-resize;
+            touch-action: none;
+            background: linear-gradient(to right, transparent 6px, rgba(255, 255, 255, 0.8) 6px, rgba(255, 255, 255, 0.8) 8px, transparent 8px);
+        }
+
+        #status {
+            position: absolute;
+            left: 50%;
+            top: 10px;
+            padding: 4px 10px;
+            transform: translateX(-50%);
+            border-radius: 6px;
+            background: rgba(12, 15, 20, 0.85);
+            color: #ffd08a;
+            font-size: 12px;
+            pointer-events: none;
+        }
+
+        #status:empty {
+            display: none;
+        }
+
+        #hint {
+            position: absolute;
+            left: 50%;
+            bottom: 8px;
+            transform: translateX(-50%);
+            color: #a6afbd;
+            font-size: 11px;
+            white-space: nowrap;
+            pointer-events: none;
+        }
+    </style>
+    <link rel="shortcut icon" href="#">
+</head>
+
+<body>
+    <div id="frames"></div>
+    <div id="labels"></div>
+    <div id="divider"></div>
+    <div id="status"></div>
+    <div id="hint">Drag to orbit · click to trace one ray · browser timings are indicative, the Node benchmark decides</div>
+    <script type="module" src="bvhCompare.js"></script>
+</body>
+
+</html>

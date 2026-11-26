@@ -1,26 +1,44 @@
-import { Box3, EquirectangularReflectionMapping, PMREMGenerator, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
+import {
+    Box3,
+    EquirectangularReflectionMapping,
+    Mesh,
+    MeshStandardMaterial,
+    PMREMGenerator,
+    PerspectiveCamera,
+    Scene,
+    TorusKnotGeometry,
+    Vector3,
+    WebGLRenderer,
+} from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import Stats from 'three/examples/jsm/libs/stats.module.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { Pane } from 'tweakpane';
 import { SceneCompiler } from "../extend/path-tracing/compiler/SceneCompiler.js";
 import { PathTracer } from "../extend/path-tracing/PathTracer.js";
+import { getTileRect } from "../extend/path-tracing/Tiles.js";
 
 import { getAssetURL } from '/extend/tools/Tool.js'
 
 const assetUrl = getAssetURL();
-const modelAssetPaths = {
-    DamagedHelmet: 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/DamagedHelmet/glTF/DamagedHelmet.gltf',
-    FlightHelmet: 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/FlightHelmet/glTF/FlightHelmet.gltf',
-    SciFiHelmet: 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/SciFiHelmet/glTF/SciFiHelmet.gltf',
+const KHRONOS_MODEL_PATH = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
+// The glTF-Sample-Assets FlightHelmet lenses use KHR_materials_transmission, which the path tracer does not
+// support yet. The legacy glTF-Sample-Models copy uses alphaMode BLEND, so the lenses stay see-through.
+const KHRONOS_LEGACY_MODEL_PATH = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/';
+const THREE_MODEL_PATH = 'https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/models/gltf/';
+const DRACO_PATH = 'https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/libs/draco/gltf/';
+const modelUrls = {
+    DamagedHelmet: `${KHRONOS_MODEL_PATH}DamagedHelmet/glTF/DamagedHelmet.gltf`,
+    FlightHelmet: `${KHRONOS_LEGACY_MODEL_PATH}FlightHelmet/glTF/FlightHelmet.gltf`,
+    Nemetona: `${THREE_MODEL_PATH}nemetona.glb`,
+    TorusKnot: null,
 };
-const modelOptions = {
-    DamagedHelmet: 'DamagedHelmet',
-    FlightHelmet: 'FlightHelmet',
-    SciFiHelmet: 'SciFiHelmet',
-};
+const modelOptions = Object.fromEntries(Object.keys(modelUrls).map((name) => [name, name]));
+const gltfLoader = new GLTFLoader()
+    .setMeshoptDecoder(MeshoptDecoder)
+    .setDRACOLoader(new DRACOLoader().setDecoderPath(DRACO_PATH));
 const hdrAssetPaths = {
     KiaraNoon: 'hdrs/kiara_5_noon_2k.hdr',
     Daytime: 'hdrs/daytime.hdr',
@@ -29,9 +47,16 @@ const hdrOptions = {
     KiaraNoon: 'KiaraNoon',
     Daytime: 'Daytime',
 };
-const info = document.querySelector("#info");
+const statsTitle = document.querySelector('#stats-title');
+const statsBody = document.querySelector('#stats-body');
+const tileGrid = document.querySelector('#tile-grid');
+const tileGridDurationMs = 1500;
+let tileGridTimer = null;
+const statsRefreshIntervalMs = 250;
+const sampleRateWindowMs = 500;
+const bytesPerTexel = 16;
 
-let renderer, scene, camera, controls, stats, pane;
+let renderer, scene, camera, controls, pane;
 let pathTracer;
 let pmremGenerator;
 let currentModel = null;
@@ -54,6 +79,8 @@ const materialParams = {
 const renderParams = {
     bounceCount: 2,
     transparentSteps: 1,
+    tilesX: 1,
+    tilesY: 1,
     renderScale: 1,
     rasterFallback: true,
     interactionResumeDelayMs: 500,
@@ -117,6 +144,23 @@ const outputToneMappingValues = {
 };
 let cameraMoving = false;
 const sceneCompiler = new SceneCompiler();
+const loadStats = {
+    loading: true,
+    modelFallback: false,
+    loadMs: 0,
+    compileMs: 0,
+    setSceneMs: 0,
+    firstFrameMs: 0,
+};
+const sampleRate = {
+    samples: Infinity,
+    resetTime: 0,
+    windowStart: 0,
+    windowSamples: 0,
+    perSecond: 0,
+};
+let lastStatsRefresh = 0;
+let statsCollapsed = false;
 
 init();
 
@@ -185,13 +229,11 @@ function applyOutputSettings() {
 function kickTraceFrame() {
     cameraMoving = false;
     if (!pathTracer.isReady()) {
-        info.innerText = 'Samples: raster';
         return;
     }
 
     pathTracer.reset();
     pathTracer.update();
-    info.innerText = `Samples: ${pathTracer.samples}`;
 }
 
 function clearResumeTraceTimer() {
@@ -224,12 +266,129 @@ function shouldUseRasterFallback() {
 }
 
 function renderPathTracingFrame() {
+    // Moving without the raster fallback restarts accumulation every frame, so
+    // trace a whole sample instead of leaving only the first tile visible.
     if (cameraMoving) {
         pathTracer.reset();
+        pathTracer.update(pathTracer.tileCount);
+        return;
     }
 
     pathTracer.update();
-    info.innerText = `Samples: ${pathTracer.samples}`;
+}
+
+function trackSampleRate(now) {
+    const { samples } = pathTracer;
+    if (loadStats.loading || cameraMoving || samples < sampleRate.samples) {
+        sampleRate.resetTime = now;
+        sampleRate.windowStart = now;
+        sampleRate.windowSamples = samples;
+        sampleRate.perSecond = 0;
+    }
+    sampleRate.samples = samples;
+
+    const windowMs = now - sampleRate.windowStart;
+    if (windowMs >= sampleRateWindowMs) {
+        sampleRate.perSecond = (samples - sampleRate.windowSamples) * 1000 / windowMs;
+        sampleRate.windowStart = now;
+        sampleRate.windowSamples = samples;
+    }
+}
+
+function formatCount(value) {
+    return value.toLocaleString('en-US');
+}
+
+function formatMs(ms) {
+    return `${ms.toFixed(1)} ms`;
+}
+
+function formatDataTexture(name, { textureWidth, textureHeight }) {
+    const megabytes = textureWidth * textureHeight * bytesPerTexel / (1024 * 1024);
+    return `${name} ${textureWidth}×${textureHeight} ${megabytes.toFixed(2)} MB`;
+}
+
+function getRenderState() {
+    if (loadStats.loading || !pathTracer.isReady()) {
+        return 'loading';
+    }
+    if (cameraMoving) {
+        return renderParams.rasterFallback ? 'raster (moving)' : 'tracing (moving)';
+    }
+    return 'tracing';
+}
+
+function refreshStatsPanel(now) {
+    const { traceRenderTarget } = pathTracer;
+    const modelLabel = loadStats.modelFallback
+        ? `${sceneParams.model} could not load. Showing Torus Knot.`
+        : sceneParams.model;
+    const lines = [
+        `${modelLabel} · ${sceneParams.environment}`,
+        `state      ${getRenderState()}`,
+        `samples    ${formatCount(pathTracer.samples)} · ${sampleRate.perSecond.toFixed(1)}/s · ${((now - sampleRate.resetTime) / 1000).toFixed(1)} s`,
+        `resolution ${traceRenderTarget.width}×${traceRenderTarget.height} · bounces ${renderParams.bounceCount}`,
+        `tiles      ${pathTracer.tilesX}×${pathTracer.tilesY} · next ${pathTracer.tileIndex + 1}/${pathTracer.tileCount}`,
+    ];
+
+    if (currentCompiledScene) {
+        const sceneStats = currentCompiledScene.stats;
+        const textureCounts = Object.entries(currentCompiledScene.material.textures)
+            .map(([type, textures]) => `${type} ${textures.length}`)
+            .join(' · ');
+        const { triangle, bvh, material } = currentCompiledScene;
+
+        lines.push(
+            '',
+            `meshes ${formatCount(sceneStats.meshCount)} · triangles ${formatCount(sceneStats.triangleCount)} · materials ${sceneStats.materialCount}`,
+            `textures   ${textureCounts}`,
+            '',
+            `load       ${formatMs(loadStats.loadMs)}`,
+            `compile    ${formatMs(loadStats.compileMs)}`,
+            `           collect ${formatMs(sceneStats.collectMs)} · bvh build ${formatMs(sceneStats.bvhBuildMs)} · encode ${formatMs(sceneStats.encodeMs)}`,
+            `setScene   ${formatMs(loadStats.setSceneMs)} · first frame ${formatMs(loadStats.firstFrameMs)} (CPU)`,
+            '',
+            `bvh        build ${formatMs(sceneStats.bvhBuildMs)} · nodes ${formatCount(sceneStats.nodeCount)} · leaves ${formatCount(sceneStats.leafCount)}`,
+            `           depth ${sceneStats.maxDepth} · max leaf ${sceneStats.maxLeafSize} tris · SAH cost ${sceneStats.sahCost.toFixed(2)}`,
+            '',
+            `gpu data   ${formatDataTexture('triangle', triangle)}`,
+            `           ${formatDataTexture('bvh', bvh)}`,
+            `           ${formatDataTexture('material', material)}`,
+        );
+    }
+
+    statsBody.textContent = lines.join('\n');
+}
+
+// A pass over a few tiles finishes within a few frames, too fast to see the
+// grid, so a grid change outlines and numbers the tiles for a moment.
+function flashTileGrid() {
+    const { tilesX, tilesY, tileCount, traceRenderTarget: { width, height } } = pathTracer;
+    const pixelRatio = renderer.getPixelRatio();
+    tileGrid.replaceChildren(...Array.from({ length: tileCount }, (_, index) => {
+        const rect = getTileRect(index, tilesX, tilesY, width, height);
+        const cell = document.createElement('div');
+        cell.textContent = `${index + 1}`;
+        Object.assign(cell.style, {
+            left: `${rect.x / pixelRatio}px`,
+            top: `${(height - rect.y - rect.height) / pixelRatio}px`,
+            width: `${rect.width / pixelRatio}px`,
+            height: `${rect.height / pixelRatio}px`,
+        });
+        return cell;
+    }));
+    tileGrid.hidden = false;
+    window.clearTimeout(tileGridTimer);
+    tileGridTimer = window.setTimeout(() => {
+        tileGrid.hidden = true;
+    }, tileGridDurationMs);
+}
+
+function toggleStatsPanel() {
+    statsCollapsed = !statsCollapsed;
+    statsTitle.textContent = `${statsCollapsed ? '▸' : '▾'} Path Tracing`;
+    statsBody.hidden = statsCollapsed;
+    lastStatsRefresh = 0;
 }
 
 function disposeSceneEnvironment() {
@@ -259,15 +418,20 @@ function setSceneEnvironment(envTexture) {
 
 async function loadSceneAssets() {
     const requestId = ++loadGeneration;
+    loadStats.loading = true;
     pathTracer.setReady(false);
-    const modelPath = modelAssetPaths[sceneParams.model];
-    const modelUrl = modelPath.startsWith('http') ? modelPath : assetUrl + modelPath;
     const envUrl = assetUrl + hdrAssetPaths[sceneParams.environment];
+    const modelUrl = modelUrls[sceneParams.model];
 
+    const loadStart = performance.now();
     const [envTexture, gltf] = await Promise.all([
         new HDRLoader().loadAsync(envUrl),
-        new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(modelUrl),
+        modelUrl && gltfLoader.loadAsync(modelUrl).catch((error) => {
+            console.warn(`Could not load ${sceneParams.model}.`, error);
+            return null;
+        }),
     ]);
+    const loadMs = performance.now() - loadStart;
 
     if (requestId !== loadGeneration) {
         envTexture.dispose();
@@ -278,16 +442,23 @@ async function loadSceneAssets() {
         scene.remove(currentModel);
     }
 
-    currentModel = gltf.scene;
+    currentModel = gltf?.scene ?? new Mesh(
+        new TorusKnotGeometry(0.6, 0.19, 128, 24),
+        new MeshStandardMaterial({ color: 0x648cb3, metalness: 0.3, roughness: 0.42 }),
+    );
     currentModelHasAlbedoTexture = modelHasAlbedoTexture(currentModel);
     scene.add(currentModel);
     fitCameraToObject(currentModel);
 
+    const compileStart = performance.now();
     const compiledScene = sceneCompiler.compile(currentModel);
+    const compileMs = performance.now() - compileStart;
 
     setSceneEnvironment(envTexture);
     pathTracer.setHdrTexture(envTexture);
+    const setSceneStart = performance.now();
     pathTracer.setScene(compiledScene);
+    const setSceneMs = performance.now() - setSceneStart;
     currentCompiledScene?.dispose();
     currentCompiledScene = compiledScene;
     applySelectedAlbedoTexture();
@@ -295,7 +466,16 @@ async function loadSceneAssets() {
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld(true);
     controls.update();
+    const firstFrameStart = performance.now();
     kickTraceFrame();
+    Object.assign(loadStats, {
+        loading: false,
+        modelFallback: Boolean(modelUrl) && !gltf,
+        loadMs,
+        compileMs,
+        setSceneMs,
+        firstFrameMs: performance.now() - firstFrameStart,
+    });
 
     requestAnimationFrame(() => {
         if (requestId !== loadGeneration) {
@@ -324,15 +504,12 @@ async function init() {
 
     controls = new OrbitControls(camera, renderer.domElement);
     controls.target = new Vector3(0, 0, 0);
-    stats = new Stats();
-    document.body.appendChild(stats.dom);
 
     pathTracer = new PathTracer(renderer, scene, camera);
     pathTracer.setRasterFallbackRenderer(({ renderer: fallbackRenderer, scene: fallbackScene, camera: fallbackCamera }) => {
         fallbackRenderer.setRenderTarget(null);
         fallbackRenderer.clear();
         fallbackRenderer.render(fallbackScene, fallbackCamera);
-        info.innerText = 'Samples: raster';
     });
     pathTracer.setSize(
         WIDTH,
@@ -341,6 +518,7 @@ async function init() {
     );
     pathTracer.setBounce(renderParams.bounceCount);
     pathTracer.setTransparentSteps(renderParams.transparentSteps);
+    pathTracer.setTiles(renderParams.tilesX, renderParams.tilesY);
     applySelectedDebugMode();
     applyOutputSettings();
 
@@ -353,6 +531,9 @@ async function init() {
 
 function initPane() {
     pane = new Pane({ title: 'PathTracing' });
+
+    statsTitle.addEventListener('click', toggleStatsPanel);
+    pane.addButton({ title: 'Collapse / expand stats' }).on('click', toggleStatsPanel);
 
     const sceneFolder = pane.addFolder({ title: 'Scene' });
     sceneFolder
@@ -406,6 +587,22 @@ function initPane() {
             pathTracer.setTransparentSteps(renderParams.transparentSteps);
             pathTracer.reset();
         });
+    // Restarting accumulation on a grid change shows the new tiles filling in
+    // from a black frame.
+    for (const [key, label] of [['tilesX', 'Tiles X'], ['tilesY', 'Tiles Y']]) {
+        renderFolder
+            .addBinding(renderParams, key, {
+                label,
+                min: 1,
+                max: 8,
+                step: 1,
+            })
+            .on('change', () => {
+                pathTracer.setTiles(renderParams.tilesX, renderParams.tilesY);
+                pathTracer.reset();
+                flashTileGrid();
+            });
+    }
     renderFolder
         .addBinding(renderParams, 'rasterFallback', {
             label: 'Raster Fallback',
@@ -499,16 +696,19 @@ function event() {
     });
 }
 
-function animate() {
+function animate(now = performance.now()) {
     requestAnimationFrame(animate);
 
-    stats.update()
     controls.update();
     if (shouldUseRasterFallback()) {
         pathTracer.renderRasterFallback();
-        return;
+    } else {
+        renderPathTracingFrame();
     }
 
-    renderPathTracingFrame();
-
+    trackSampleRate(now);
+    if (!statsCollapsed && now - lastStatsRefresh >= statsRefreshIntervalMs) {
+        lastStatsRefresh = now;
+        refreshStatsPanel(now);
+    }
 }

@@ -2,6 +2,7 @@
 
 ## Entries
 
+- [2026-11-26 · Add a generic BVH, path tracing transmission and README example GIFs](./2026-11-26-generic-bvh-and-transmission.md)
 - [2026-11-23 · Upgrade three to r187, add CI checks and path tracing diagnostics](./2026-11-23-three-r187-upgrade.md)
 
 ## Adding an entry

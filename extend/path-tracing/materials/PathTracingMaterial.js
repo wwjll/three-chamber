@@ -89,7 +89,7 @@ class PathTracingMaterial extends MaterialBase {
                 uniform mat4 projectionMatrixInverse;
                 uniform sampler2D hdrTexture;
                 uniform sampler2D triangleDataTexture;
-                uniform sampler2D bvhNodeDataTexture;
+                uniform highp usampler2D bvhNodeDataTexture;
                 uniform sampler2D materialDataTexture;
                 uniform sampler2D outTexture;
                 uniform highp sampler2DArray sceneAlbedoTextureArray;

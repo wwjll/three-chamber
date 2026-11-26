@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { Brdf } from '../../extend/path-tracing/shaders/brdf.glsl.js';
+import { Common } from '../../extend/path-tracing/shaders/common.glsl.js';
 import { Sample } from '../../extend/path-tracing/shaders/sample.glsl.js';
 import { Struct } from '../../extend/path-tracing/shaders/struct.glsl.js';
 
@@ -133,14 +134,47 @@ function integrateCosineWithBsdfSampler({
     return estimate / sampleCount;
 }
 
+// Runs the shader's own FresnelDielectric in JavaScript. Its body only uses
+// float locals, arithmetic, and sqrt, so a textual translation is exact.
+function loadShaderFresnel() {
+    const [, body] = Sample.match(/float FresnelDielectric\(float cosThetaI, float relativeIor\) \{([\s\S]*?)\n {4}\}/);
+    const javascriptBody = body.replace(/\bfloat\s+/g, 'let ').replace(/\bsqrt\(/g, 'Math.sqrt(');
+    return new Function('cosThetaI', 'relativeIor', javascriptBody);
+}
+
+// GLSL refract(): incident and normal point against each other.
+function refract(incident, normal, relativeIor) {
+    const cosine = dot(normal, incident);
+    const k = 1 - relativeIor * relativeIor * (1 - cosine * cosine);
+    if (k < 0) {
+        return [0, 0, 0];
+    }
+    const normalScale = relativeIor * cosine + Math.sqrt(k);
+    return incident.map((component, axis) => relativeIor * component - normalScale * normal[axis]);
+}
+
+function reflect(incident, normal) {
+    const scale = 2 * dot(normal, incident);
+    return incident.map((component, axis) => component - scale * normal[axis]);
+}
+
 test('shader exposes a structured BSDF sampling contract', () => {
     assert.match(Struct, /struct BSDFSample/);
     assert.match(Sample, /BSDFSample SampleBSDF/);
     assert.match(Sample, /BSDF_EVENT_DIFFUSE/);
     assert.match(Sample, /BSDF_EVENT_GLOSSY/);
+    assert.match(Sample, /BSDF_EVENT_TRANSMISSION/);
+    assert.match(Sample, /BSDF_EVENT_DELTA/);
+    assert.match(Sample, /BSDFSample SampleDielectricBSDF/);
     assert.doesNotMatch(Sample, /SampleBRDFDirection/);
     assert.match(Brdf, /float BSDFPDF/);
     assert.match(Brdf, /vec3 BSDFEvaluate/);
+});
+
+test('every bounce spawns its ray on the side the new direction leaves through', () => {
+    assert.match(Common, /vec3 spawnRayOrigin\(vec3 position, vec3 geometricNormal, vec3 direction\)/);
+    assert.match(Common, /ray\.origin = spawnRayOrigin\(hit\.position, surfaceGeometricNormal, bsdfSample\.direction\);/);
+    assert.doesNotMatch(Common, /\* RAY_OFFSET_EPSILON;/);
 });
 
 test('mixed diffuse/GGX sampling matches its PDF at normal and grazing views', () => {
@@ -164,4 +198,89 @@ test('mixed diffuse/GGX sampling matches its PDF at normal and grazing views', (
             `Expected unit cosine integral, received ${estimate} for ${JSON.stringify(sampleCase)}`
         );
     }
+});
+
+test('shader Fresnel matches the angle form, total internal reflection, and reciprocity', () => {
+    const fresnel = loadShaderFresnel();
+    const ior = 1.5;
+
+    // Normal incidence reduces to ((n - 1) / (n + 1))^2 from either side.
+    assert.ok(Math.abs(fresnel(1, 1 / ior) - 0.04) < 1e-12);
+    assert.ok(Math.abs(fresnel(1, ior) - 0.04) < 1e-12);
+
+    for (let degrees = 1; degrees < 90; degrees += 4) {
+        const incident = degrees * PI / 180;
+        const transmitted = Math.asin(Math.sin(incident) / ior);
+        // Fresnel's equations in terms of the two angles (Born and Wolf 1.5.3).
+        const perpendicular = -Math.sin(incident - transmitted) / Math.sin(incident + transmitted);
+        const parallel = Math.tan(incident - transmitted) / Math.tan(incident + transmitted);
+        const expected = 0.5 * (perpendicular * perpendicular + parallel * parallel);
+        const entering = fresnel(Math.cos(incident), 1 / ior);
+        assert.ok(Math.abs(entering - expected) < 1e-12, `Entering at ${degrees} degrees`);
+
+        // Light leaving along the refracted angle sees the same reflectance.
+        const leaving = fresnel(Math.cos(transmitted), ior);
+        assert.ok(Math.abs(leaving - entering) < 1e-12, `Leaving at ${degrees} degrees`);
+    }
+
+    const criticalAngle = Math.asin(1 / ior);
+    assert.equal(fresnel(Math.cos(criticalAngle + 1e-6), ior), 1);
+    assert.ok(fresnel(Math.cos(criticalAngle - 1e-3), ior) < 1);
+});
+
+test('a smooth glass sphere under a white furnace returns every path with unit weight', () => {
+    // Mirrors SampleDielectricBSDF: reflect with probability F at weight 1,
+    // refract otherwise at weight relativeIor^2. Entering scales by 1 / n^2
+    // and leaving by n^2, so any path that escapes must carry exactly 1, and
+    // a sphere never traps light by total internal reflection.
+    const fresnel = loadShaderFresnel();
+    const random = createRandom(0xD1E1EC);
+    const ior = 1.5;
+    const maxEvents = 64;
+    const sampleCount = 20_000;
+    let escapedWeight = 0;
+    let trappedPaths = 0;
+
+    for (let i = 0; i < sampleCount; i++) {
+        const radius = Math.sqrt(random());
+        const phi = 2 * PI * random();
+        let origin = [radius * Math.cos(phi), radius * Math.sin(phi), -3];
+        let direction = [0, 0, 1];
+        let weight = 1;
+        let escaped = false;
+
+        for (let event = 0; event < maxEvents; event++) {
+            const halfB = dot(origin, direction);
+            const discriminant = halfB * halfB - (dot(origin, origin) - 1);
+            const inside = dot(origin, origin) < 1;
+            if (!inside && (discriminant <= 0 || halfB >= 0)) {
+                escaped = true;
+                break;
+            }
+            const distance = inside ? -halfB + Math.sqrt(discriminant) : -halfB - Math.sqrt(discriminant);
+            const position = origin.map((component, axis) => component + distance * direction[axis]);
+            const normal = inside ? position.map((component) => -component) : position;
+            const relativeIor = inside ? ior : 1 / ior;
+            const reflectance = fresnel(Math.min(-dot(direction, normal), 1), relativeIor);
+
+            if (random() < reflectance) {
+                direction = normalize(reflect(direction, normal));
+            } else {
+                direction = normalize(refract(direction, normal, relativeIor));
+                weight *= relativeIor * relativeIor;
+            }
+            const side = dot(direction, normal) < 0 ? -1 : 1;
+            origin = position.map((component, axis) => component + side * 1e-9 * normal[axis]);
+        }
+
+        if (escaped) {
+            assert.ok(Math.abs(weight - 1) < 1e-9, `Escaped path carried weight ${weight}`);
+            escapedWeight += weight;
+        } else {
+            trappedPaths++;
+        }
+    }
+
+    assert.ok(trappedPaths < sampleCount * 1e-3, `${trappedPaths} paths stayed inside the sphere`);
+    assert.ok(Math.abs(escapedWeight / sampleCount - 1) < 1e-3);
 });

@@ -23,6 +23,8 @@ const bsdfEventFlags = Object.freeze({
     1: 'Diffuse',
     2: 'Glossy',
     4: 'Reflection',
+    8: 'Transmission',
+    16: 'Delta',
 });
 
 const pathFailureFlags = Object.freeze({

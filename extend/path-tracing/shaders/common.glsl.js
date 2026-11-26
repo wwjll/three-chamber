@@ -38,6 +38,15 @@ const Common =  /* glsl */`
         return max(value.r, max(value.g, value.b));
     }
 
+    // A new ray starts on the side of the surface it leaves through, so a
+    // refracted ray starts inside the object and a reflected ray outside.
+    // Rounding error in the hit position grows with its magnitude, so the
+    // offset grows with it instead of staying a fixed world-space distance.
+    vec3 spawnRayOrigin(vec3 position, vec3 geometricNormal, vec3 direction) {
+        float offset = RAY_OFFSET_EPSILON * (1.0 + maxComponent(abs(position)));
+        return position + geometricNormal * (dot(direction, geometricNormal) < 0.0 ? -offset : offset);
+    }
+
     PathDiagnostic createPathDiagnostic() {
         return PathDiagnostic(0, PATH_TERMINATION_NONE, -1, uint(0), uint(0), 0.0, 1.0, 0.0);
     }
@@ -89,6 +98,10 @@ const Common =  /* glsl */`
         hit.material.alphaMode = sceneMaterial.alphaMode;
         hit.material.doubleSided = sceneMaterial.doubleSided;
         hit.material.baseColor = resolvedBaseColor;
+        hit.material.transmission = sceneMaterial.transmission;
+        hit.material.IOR = sceneMaterial.IOR;
+        hit.material.thickness = sceneMaterial.thickness;
+        hit.material.absorption = sceneMaterial.absorption;
 
         hit.material.roughness = clamp(sceneMaterial.roughness, 0.02, 1.0);
         if(hasTextureIndex(sceneMaterial.metallicRoughnessTextureIndex)) {
@@ -150,10 +163,10 @@ const Common =  /* glsl */`
             Material sceneMaterial = getSceneSurfaceMaterial(hit.materialIndex, hit.uv, surfaceBaseColor, surfaceAlpha);
 
             if(sceneMaterial.alphaMode >= 0.5 && sceneMaterial.alphaMode < 1.5 && surfaceAlpha < 0.5) {
-                currentRay.origin = hit.position + currentRay.direction * RAY_OFFSET_EPSILON * 2.0;
+                currentRay.origin = spawnRayOrigin(hit.position, hit.geometricNormal, currentRay.direction);
             } else if(sceneMaterial.alphaMode >= 1.5 && surfaceAlpha < 1.0 - EPSILON) {
                 transmissionFilter *= mix(vec3(1.0), surfaceBaseColor, clamp(surfaceAlpha, 0.0, 1.0));
-                currentRay.origin = hit.position + currentRay.direction * RAY_OFFSET_EPSILON * 2.0;
+                currentRay.origin = spawnRayOrigin(hit.position, hit.geometricNormal, currentRay.direction);
             } else {
                 applyResolvedSceneMaterial(hit, sceneMaterial, surfaceBaseColor, surfaceAlpha);
                 return hit;
@@ -279,6 +292,14 @@ const Common =  /* glsl */`
                 break;
             }
 
+            // Beer-Lambert absorption along the segment that just crossed a
+            // solid dielectric. A back-face hit means the ray is leaving the
+            // medium of the surface it hit, so that material owns the segment.
+            // Media do not nest: an object inside glass is not tracked.
+            if(hit.isInside && hit.material.transmission > 0.0 && hit.material.thickness > 0.0) {
+                throughput *= exp(-hit.material.absorption * hit.distance);
+            }
+
             if(debugMode != 0) {
                 return renderDebugHit(
                     hit,
@@ -326,7 +347,8 @@ const Common =  /* glsl */`
                 surfaceNormal,
                 tangent,
                 bitangent,
-                hit.material
+                hit.material,
+                hit.isInside
             );
             diagnostic.lastBsdfEvent = bsdfSample.flags;
             diagnostic.lastSamplePdf = bsdfSample.pdf;
@@ -343,7 +365,12 @@ const Common =  /* glsl */`
                 diagnostic.terminationReason = PATH_TERMINATION_NON_FINITE;
                 break;
             }
-            if(!bsdfSample.valid || dot(bsdfSample.direction, surfaceGeometricNormal) <= 0.0) {
+            // A reflection must leave above the geometric surface and a
+            // transmission below it; a shading normal can bend either one to
+            // the wrong side, which stays a zero-contribution null event.
+            bool transmitted = (bsdfSample.flags & BSDF_EVENT_TRANSMISSION) != uint(0);
+            float exitCosine = dot(bsdfSample.direction, surfaceGeometricNormal);
+            if(!bsdfSample.valid || (transmitted ? exitCosine >= 0.0 : exitCosine <= 0.0)) {
                 diagnostic.terminationReason = PATH_TERMINATION_INVALID_BSDF;
                 break;
             }
@@ -375,7 +402,7 @@ const Common =  /* glsl */`
                 }
             }
 
-            ray.origin = hit.position + surfaceGeometricNormal * RAY_OFFSET_EPSILON;
+            ray.origin = spawnRayOrigin(hit.position, surfaceGeometricNormal, bsdfSample.direction);
             ray.direction = bsdfSample.direction;
         }
 

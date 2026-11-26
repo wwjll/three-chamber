@@ -4,6 +4,7 @@ const Rand =  /* glsl */`
     #define RNG_DOMAIN_GGX uint(5)
     #define RNG_DOMAIN_BRDF uint(6)
     #define RNG_DOMAIN_RUSSIAN_ROULETTE uint(7)
+    #define RNG_DOMAIN_TRANSMISSION uint(8)
 
     uint updateSeed(float sampleCount) {
         uvec2 pixel = uvec2(ivec2(gl_FragCoord.xy));

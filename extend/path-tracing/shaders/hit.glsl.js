@@ -154,31 +154,24 @@ const Hit =  /* glsl */`
             if(sp <= 0) break;
 
             int index = stack[--sp];
-            BVHNode node = getBVHNode(float(index));
+            BVHNode node = getBVHNode(index);
             float d = hitAABB(ray, node.aa, node.bb);
         
             if(d >= 0.0 && d <= hit.distance) {
-                if(node.isLeaf == 1) {
+                if(node.isLeaf) {
                     int start = node.index;
                     int end = node.index + node.size - 1;
                     hitTriangles(start, end, ray, hit);
                     continue;
                 }
         
-                int left = node.left;
+                int left = index + 1;
                 int right = node.right;
-                float dLeft = INFINITY;
-                float dRight = INFINITY;
                 float maxDistance = hit.distance;
-                if(left > 0) {
-                    BVHNode leftNode = getBVHNode(float(left));
-                    dLeft = hitAABB(ray, leftNode.aa, leftNode.bb);
-                }
-        
-                if(right > 0) {
-                    BVHNode rightNode = getBVHNode(float(right));
-                    dRight = hitAABB(ray, rightNode.aa, rightNode.bb);
-                }
+                BVHNode leftNode = getBVHNode(left);
+                float dLeft = hitAABB(ray, leftNode.aa, leftNode.bb);
+                BVHNode rightNode = getBVHNode(right);
+                float dRight = hitAABB(ray, rightNode.aa, rightNode.bb);
 
                 bool leftHit = dLeft >= 0.0 && dLeft <= maxDistance;
                 bool rightHit = dRight >= 0.0 && dRight <= maxDistance;

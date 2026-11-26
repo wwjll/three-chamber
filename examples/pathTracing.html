@@ -13,25 +13,59 @@
             font-family: monospace;
         }
 
-        #info {
-            color: white;
+        #stats {
             position: absolute;
             left: 10px;
-            bottom: 10px;
-            opacity: 0.5;
+            top: 10px;
+            padding: 6px 8px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 6px;
+            background: rgba(12, 15, 20, 0.78);
+            color: #e6edf3;
+            font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            pointer-events: none;
         }
 
-        #output {
+        #stats-title {
+            color: #8ed7ff;
+            margin-bottom: 2px;
+            cursor: pointer;
+            pointer-events: auto;
+            user-select: none;
+        }
+
+        #stats-body {
             white-space: pre;
-            margin-bottom: 10px;
+        }
+
+        #tile-grid {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+
+        #tile-grid[hidden] {
+            display: none;
+        }
+
+        #tile-grid > div {
+            position: absolute;
+            box-sizing: border-box;
+            padding: 4px 6px;
+            border: 1px solid rgba(142, 215, 255, 0.85);
+            color: #8ed7ff;
+            font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            text-shadow: 0 0 3px #000;
         }
     </style>
     <link rel="shortcut icon" href="#">
 </head>
 
 <body>
-    <div id="info">
-        <div id="output">sampes: 1</div>
+    <div id="tile-grid" hidden></div>
+    <div id="stats">
+        <div id="stats-title" title="Click to collapse or expand">▾ Path Tracing</div>
+        <div id="stats-body">Loading…</div>
     </div>
     <script type="module" src="pathTracing.js"></script>
 </body>

@@ -2,7 +2,7 @@ import { gpuSceneLayout } from '../GpuSceneLayout.js'
 
 class CompiledScene {
     constructor(encodedScene) {
-        const { triangle, bvh, material } = encodedScene || {};
+        const { triangle, bvh, material, stats } = encodedScene || {};
         if (!triangle?.dataTexture || !bvh?.dataTexture || !material?.dataTexture) {
             throw new Error('[PathTracing] CompiledScene requires triangle, BVH, and material buffers.');
         }
@@ -11,6 +11,7 @@ class CompiledScene {
         this.triangle = triangle;
         this.bvh = bvh;
         this.material = material;
+        this.stats = stats;
         this.disposed = false;
     }
 

@@ -1,24 +1,24 @@
+import { BVH_LEAF_COUNT_MASK, BVH_LEAF_FLAG } from '../../partition/bvh/BVHLayout.js'
+
 const Utils =  /* glsl */`
-    BVHNode getBVHNode(float i) {
-        float width = bvhNodeDataTextureSize.x;
-        ivec2 uv0 = ivec2(mod(texelsPerBVHNode * i + 0.0, width), texelsPerBVHNode * i / width);
-        ivec2 uv1 = ivec2(mod(texelsPerBVHNode * i + 1.0, width), texelsPerBVHNode * i / width);
-        ivec2 uv2 = ivec2(mod(texelsPerBVHNode * i + 2.0, width), texelsPerBVHNode * i / width);
+    // Reads one node of the extend/partition layout (see BVHLayout.js) from
+    // two RGBA32UI texels. The texture width is even, so both texels of a
+    // node are in the same row. Word 3 is the right child relative to the
+    // node for internal nodes, and the first triangle slot for leaves.
+    BVHNode getBVHNode(int i) {
+        int width = int(bvhNodeDataTextureSize.x);
+        int texel = int(texelsPerBVHNode) * i;
+        ivec2 uv = ivec2(texel % width, texel / width);
 
-        vec4 texel0 = texelFetch(bvhNodeDataTexture, uv0, 0);
-        vec4 texel1 = texelFetch(bvhNodeDataTexture, uv1, 0);
-        vec4 texel2 = texelFetch(bvhNodeDataTexture, uv2, 0);
+        uvec4 texel0 = texelFetch(bvhNodeDataTexture, uv, 0);
+        uvec4 texel1 = texelFetch(bvhNodeDataTexture, uv + ivec2(1, 0), 0);
 
-        vec3 aa = texel0.xyz;
-        vec3 bb = vec3(texel0.w, texel1.xy);
-        int isLeaf = int(texel1.w);
+        uint flags = texel1.w;
+        bool isLeaf = (flags & 0x${BVH_LEAF_FLAG.toString(16)}u) != 0u;
+        int offset = int(texel0.w);
+        int size = int(flags & 0x${BVH_LEAF_COUNT_MASK.toString(16)}u);
 
-        int left = int(texel2.x);
-        int right = int(texel2.y);
-        int index = int(texel2.z);
-        int size = int(texel2.w);
-
-        return BVHNode(aa, bb, isLeaf, left, right, index, size);
+        return BVHNode(uintBitsToFloat(texel0.xyz), uintBitsToFloat(texel1.xyz), isLeaf, i + offset, offset, size);
     }
 
     Triangle getTriangle(float i) {
@@ -58,12 +58,14 @@ const Utils =  /* glsl */`
         ivec2 uv2 = ivec2(mod(texelsPerMaterial * i + 2.0, width), texelsPerMaterial * i / width);
         ivec2 uv3 = ivec2(mod(texelsPerMaterial * i + 3.0, width), texelsPerMaterial * i / width);
         ivec2 uv4 = ivec2(mod(texelsPerMaterial * i + 4.0, width), texelsPerMaterial * i / width);
+        ivec2 uv5 = ivec2(mod(texelsPerMaterial * i + 5.0, width), texelsPerMaterial * i / width);
 
         vec4 texel0 = texelFetch(materialDataTexture, uv0, 0);
         vec4 texel1 = texelFetch(materialDataTexture, uv1, 0);
         vec4 texel2 = texelFetch(materialDataTexture, uv2, 0);
         vec4 texel3 = texelFetch(materialDataTexture, uv3, 0);
         vec4 texel4 = texelFetch(materialDataTexture, uv4, 0);
+        vec4 texel5 = texelFetch(materialDataTexture, uv5, 0);
 
         Material material = DebugAlbedo();
         material.baseColor = texel0.rgb;
@@ -78,6 +80,10 @@ const Utils =  /* glsl */`
         material.normalScale = texel3.yz;
         material.alphaMode = texel3.w;
         material.doubleSided = texel4.x;
+        material.transmission = texel4.y;
+        material.IOR = texel4.z;
+        material.thickness = texel4.w;
+        material.absorption = texel5.xyz;
         return material;
     }
 `

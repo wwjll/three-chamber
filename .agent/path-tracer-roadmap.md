@@ -12,6 +12,15 @@ needed to improve correctness, observability, convergence, and maintainability.
   contract.
 - Diffuse and GGX sampling use the same mixture weights in sampling and PDF
   evaluation. Invalid GGX reflections remain zero-contribution null events.
+- Smooth dielectric transmission is a pair of delta lobes: exact Fresnel
+  reflection, Snell refraction, total internal reflection, and the inverse
+  eta squared radiance factor. The lobe is selected with
+  `transmission * (1 - metallic)`. Zero thickness is thin-walled. Solid
+  dielectrics apply Beer-Lambert absorption from `attenuationColor` and
+  `attenuationDistance` to each segment that ends on a back face. Roughness
+  and nested media are not implemented.
+- New rays start on the side of the geometric surface their direction leaves
+  through, offset in proportion to the hit position's magnitude.
 - Environment and surface emission evaluation are isolated behind light
   interfaces.
 - Russian roulette starts after depth three and compensates surviving paths.
@@ -19,8 +28,9 @@ needed to improve correctness, observability, convergence, and maintainability.
 - GPU scene layout constants are shared by CPU encoders and shader generation.
 - `SceneCompiler`, `GpuSceneEncoder`, and `CompiledScene` separate scene
   compilation, encoding, ownership, and rendering concerns.
-- Scene geometry is normalized to finite Float32 position, normal, and UV data
-  before it is merged and encoded.
+- Scene triangles are collected as flat world-space Float32 arrays, including
+  skinned and morphed positions and skinned normals, and the BVH comes from
+  `extend/partition`.
 - Deterministic tests cover BSDF/PDF consistency, GPU layout contracts, compiler
   ownership, finite scene buffers, and light interfaces.
 
@@ -57,8 +67,11 @@ needed to improve correctness, observability, convergence, and maintainability.
   surface-frame helper.
 - Add a mathematically justified shading-normal correction for reflection.
 - Validate the correction at grazing angles and with strong normal maps.
-- Offset new ray origins to the side selected by the outgoing direction.
+- Offset new ray origins to the side selected by the outgoing direction. Done
+  in `spawnRayOrigin`.
 - Replace the fixed world-space epsilon with a scale-aware offset strategy.
+  `spawnRayOrigin` scales with position magnitude; validate it against very
+  small and very large reference scenes.
 - Cover front-facing, back-facing, and double-sided geometry.
 
 ### Acceptance Criteria
@@ -97,7 +110,9 @@ needed to improve correctness, observability, convergence, and maintainability.
 - Make event flags precise enough to identify diffuse, glossy, delta,
   reflection, and future transmission events.
 - Add energy and reciprocity checks over representative material parameters.
-- Add transmission and refraction only after the reflection contract is stable.
+- Smooth transmission was added ahead of this work because delta lobes do not
+  interact with the continuous-lobe PDFs. Add rough transmission (Walter et al.
+  2007 GGX BTDF) only after the reflection contract is stable.
 
 ### Acceptance Criteria
 
@@ -109,18 +124,17 @@ needed to improve correctness, observability, convergence, and maintainability.
 
 - Extract mesh collection, material registration, geometry normalization,
   triangle storage, BVH construction, and GPU packing from `SceneGenerator`.
-- Replace per-triangle `Vector2` and `Vector3` object graphs with flat typed
-  arrays.
+  BVH construction has moved to `extend/partition`; see P1: Generic BVH.
 - Introduce explicit encoded-buffer schemas and validate the layout version when
   a `CompiledScene` is bound to a `PathTracer`.
 - Detect BVH depth that can exceed the shader traversal stack instead of
-  silently dropping nodes.
-- Benchmark the current median split against a binned SAH builder before
-  changing the default.
+  silently dropping nodes. See
+  [BVH and the path tracing shader](../docs/todos/bvh-shader-compatibility.md).
 - Move expensive compilation to a worker with progress reporting and
   cancellation.
 - Add explicit support policies for instancing, skinning, morph targets, and
-  dynamic transforms.
+  dynamic transforms. Skinning and morph positions are covered by the BVH
+  refit policy; instancing and morph normals remain open.
 - Separate material-only updates from full geometry and BVH rebuilds.
 - Replace maximum-resolution texture-array expansion with a documented texture
   packing or resampling policy.
@@ -131,6 +145,56 @@ needed to improve correctness, observability, convergence, and maintainability.
 - Large-scene compilation records wall time, peak memory, triangle count, node
   count, BVH depth, and encoded texture sizes.
 - Cancelling or replacing a compile releases all temporary and owned resources.
+
+## P1: Generic BVH
+
+Decisions: [Generic binned BVH](../docs/decisions/2026-11-24-generic-binned-bvh.md)
+and [BVH comparison example](../docs/decisions/2026-11-24-bvh-comparison-example.md).
+
+Done:
+
+- `extend/partition` provides the binned SAH and center builders over a
+  32-byte typed-array node layout, `auto`, recursive, and iterative build
+  modes with byte-identical output, refit from bounds or vertices, reentrant
+  ray queries, tree statistics, and packing of several trees.
+- `test/partition` covers layout bits, build invariants for every option
+  combination, agreement with brute-force ray casts, relocation, nested
+  traversal, refit exactness, and packed refit isolation.
+- Node benchmark (`pnpm run bench:partition`): `minmax` primitive bounds are
+  as fast as center plus half extent once the bin loop was fixed, so the
+  `center` format was removed. Results are in the generic binned BVH decision
+  record.
+- Path tracer integration: `SceneGenerator` collects world-space triangles
+  with `getVertexPosition` and `matrixWorld` (skinned normals through
+  `applyBoneTransform` with w = 0), builds with `buildBVH`, writes triangles
+  in leaf order, and uploads the nodes unchanged as two RGBA32UI texels per
+  node (GPU scene layout version 2). The shader reads relative children and
+  the flags word directly. `Triangle`, `BVHNode`, and `BVHBuilder` are gone.
+
+Next, in order:
+
+1. Animated geometry: mark dynamic meshes at compile time, refit them every
+   frame, rebuild above the SAH threshold, and re-upload their data.
+   `examples/pathTracing.html` stays a static-scene example with a live stats
+   panel (load, collect, BVH build, encode, and upload times, BVH shape, GPU
+   data sizes, samples per second); animated refit gets its own example.
+2. BVH comparison example (`examples/bvhCompare.html`, worker in
+   `examples/bvhCompare_bvhWorker.js`) as described in its decision record. It
+   is in place with skinned, static, multi-mesh, and Draco models up to 320k
+   triangles, a selectable slot grid and wipe view, per-level box display
+   that the model can occlude, a traversal heat map, ray picking, and a
+   brute-force check with progress. Open follow-ups are in
+   [BVH comparison example follow-ups](../docs/todos/bvh-compare-example.md).
+3. Resolve the shader items in `docs/todos/bvh-shader-compatibility.md` when
+   the traversal shader is changed.
+
+### Acceptance Criteria
+
+- Rendering the reference scenes with the new BVH matches the old BVH within
+  Monte Carlo noise at the same sample count.
+- No ray in the reference scenes reaches the shader step or stack limit.
+- An animated skinned model refits every frame without a full rebuild until
+  the SAH threshold is crossed.
 
 ## P1: Lifecycle and Loading
 

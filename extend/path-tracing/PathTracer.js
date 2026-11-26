@@ -2,6 +2,7 @@ import { ClampToEdgeWrapping, Color, DataArrayTexture, FloatType, LinearFilter, 
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { OutputMaterial } from './materials/OutputMaterial.js'
 import { PathTracingMaterial } from './materials/PathTracingMaterial.js'
+import { getTileRect } from './Tiles.js'
 
 import {
     texelsPerTriangle,
@@ -12,9 +13,19 @@ import {
 } from './Constants.js'
 
 
+// Each step traces one tile. Every tile of a pass reads the same completed
+// accumulation from `outRenderTarget` and writes `traceRenderTarget`, so a
+// sample only counts once its last tile is done and the targets swap.
 function* renderTask() {
     while (true) {
-        const { renderer, camera, traceScene, traceCamera, pathTracingMaterial, outputMaterial } = this;
+        const { camera, pathTracingMaterial, traceRenderTarget } = this;
+        const tileRect = getTileRect(
+            this.tileIndex,
+            this.tilesX,
+            this.tilesY,
+            traceRenderTarget.width,
+            traceRenderTarget.height
+        );
 
         camera.updateMatrixWorld();
         camera.updateProjectionMatrix();
@@ -26,29 +37,24 @@ function* renderTask() {
         pathTracingMaterial.outTexture = this.outRenderTarget.texture;
 
         pathTracingMaterial.diagnosticOutput = 0;
-        renderer.setRenderTarget(this.traceRenderTarget);
-        renderer.render(traceScene, traceCamera);
-
-        outputMaterial.renderTexture = this.traceRenderTarget.texture;
+        this._renderTile(traceRenderTarget, tileRect);
 
         if (this.diagnosticMode !== 0) {
             pathTracingMaterial.diagnosticOutput = 1;
-            renderer.setRenderTarget(this.diagnosticSummaryRenderTarget);
-            renderer.render(traceScene, traceCamera);
+            this._renderTile(this.diagnosticSummaryRenderTarget, tileRect);
 
             pathTracingMaterial.diagnosticOutput = 2;
-            renderer.setRenderTarget(this.diagnosticMetricsRenderTarget);
-            renderer.render(traceScene, traceCamera);
+            this._renderTile(this.diagnosticMetricsRenderTarget, tileRect);
 
             pathTracingMaterial.diagnosticOutput = 0;
         }
 
-        renderer.setRenderTarget(null);
-        this.outputQuad.render(renderer);
-
-        [this.traceRenderTarget, this.outRenderTarget] = [this.outRenderTarget, this.traceRenderTarget];
-
-        this.samples++;
+        this.tileIndex++;
+        if (this.tileIndex === this.tileCount) {
+            [this.traceRenderTarget, this.outRenderTarget] = [this.outRenderTarget, this.traceRenderTarget];
+            this.samples++;
+            this.tileIndex = 0;
+        }
         yield;
     }
 
@@ -166,6 +172,9 @@ class PathTracer {
         this.pixelRatio = 0;
         this.rasterFallbackRenderer = null;
         this.diagnosticMode = 0;
+        this.tilesX = 1;
+        this.tilesY = 1;
+        this.tileIndex = 0;
         this.init();
     }
 
@@ -303,6 +312,19 @@ class PathTracer {
         this.pathTracingMaterial.maxTransparentSteps = Math.max(1, Math.min(stepCount, maxTransparentSteps));
     }
 
+    get tileCount() {
+        return this.tilesX * this.tilesY;
+    }
+
+    // Splits each sample into a tilesX × tilesY grid and traces one tile per
+    // update, which bounds the GPU time of a single frame. The pass in progress
+    // restarts so every tile of a sample shares one grid.
+    setTiles(tilesX, tilesY = tilesX) {
+        this.tilesX = Math.max(1, Math.floor(tilesX));
+        this.tilesY = Math.max(1, Math.floor(tilesY));
+        this.tileIndex = 0;
+    }
+
     setHdrTexture(texture) {
         texture.minFilter = LinearFilter;
         texture.magFilter = LinearFilter;
@@ -386,6 +408,13 @@ class PathTracer {
     }
 
     setDataTexture(triangle, bvh, material) {
+        const { maxTextureSize } = this.renderer.capabilities;
+        Object.entries({ triangle, bvh, material }).forEach(([name, buffer]) => {
+            if (buffer.textureHeight > maxTextureSize) {
+                throw new Error(`[PathTracing] The ${name} texture needs ${buffer.textureHeight} rows, but this GPU allows ${maxTextureSize}.`);
+            }
+        });
+
         const pathTracingMaterial = this.pathTracingMaterial;
         pathTracingMaterial.triangleDataTexture = triangle.dataTexture;
         pathTracingMaterial.triangleDataTextureSize = {
@@ -446,7 +475,47 @@ class PathTracer {
         this.outputMaterial.diagnosticMaxBounce = this.pathTracingMaterial.maxBounce;
     }
 
-    update() {
+    _renderTile(target, { x, y, width, height }) {
+        target.scissor.set(x, y, width, height);
+        target.scissorTest = this.tileCount > 1;
+        this.renderer.setRenderTarget(target);
+        this.renderer.render(this.traceScene, this.traceCamera);
+        target.scissorTest = false;
+    }
+
+    // Shows the latest completed sample, then overlays the tiles the current
+    // pass has already traced. Untraced tiles keep the completed sample instead
+    // of the older accumulation still stored in `traceRenderTarget`.
+    _renderOutput() {
+        const { renderer, outputMaterial, outputQuad, traceRenderTarget } = this;
+        renderer.setRenderTarget(null);
+        outputMaterial.renderTexture = this.outRenderTarget.texture;
+        outputQuad.render(renderer);
+
+        if (this.tileIndex === 0) {
+            return;
+        }
+
+        const pixelRatio = renderer.getPixelRatio();
+        outputMaterial.renderTexture = traceRenderTarget.texture;
+        renderer.setScissorTest(true);
+        for (let index = 0; index < this.tileIndex; index++) {
+            const { x, y, width, height } = getTileRect(
+                index,
+                this.tilesX,
+                this.tilesY,
+                traceRenderTarget.width,
+                traceRenderTarget.height
+            );
+            renderer.setScissor(x / pixelRatio, y / pixelRatio, width / pixelRatio, height / pixelRatio);
+            outputQuad.render(renderer);
+        }
+        renderer.setScissorTest(false);
+    }
+
+    // Traces `tileSteps` tiles and presents the result. Passing `tileCount`
+    // traces a whole sample in one call.
+    update(tileSteps = 1) {
         if (this.disposed) {
             return;
         }
@@ -457,7 +526,10 @@ class PathTracer {
 
         }
 
-        this.task.next();
+        for (let step = 0; step < tileSteps; step++) {
+            this.task.next();
+        }
+        this._renderOutput();
     }
 
     setRasterFallbackRenderer(callback) {
@@ -492,6 +564,7 @@ class PathTracer {
         const clearAlpha = this.renderer.getClearAlpha();
 
         this.samples = 0;
+        this.tileIndex = 0;
 
         this.renderer.setClearColor(0x000000, 0);
 

@@ -1,6 +1,23 @@
-import { ClampToEdgeWrapping, Color, DataTexture, DoubleSide, Float32BufferAttribute, FloatType, NearestFilter, NoColorSpace, RGBAFormat, Texture, Vector2, Vector3 } from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import {
+    ClampToEdgeWrapping,
+    Color,
+    DataTexture,
+    DoubleSide,
+    FloatType,
+    Matrix3,
+    NearestFilter,
+    NoColorSpace,
+    RGBAFormat,
+    RGBAIntegerFormat,
+    Texture,
+    UnsignedIntType,
+    Vector3,
+    Vector4,
+} from 'three';
 
+import { buildBVH } from '../partition/bvh/buildBVH.js'
+import { getBVHStats } from '../partition/bvh/queryBVH.js'
+import { computeTriangleBounds } from '../partition/triangles.js'
 import {
     texelsPerTriangle,
     texelsPerBVHNode,
@@ -10,497 +27,134 @@ import {
 } from './Constants.js'
 import { gpuSceneLayout } from './GpuSceneLayout.js'
 
-const geometryAttributeAccessors = ['getX', 'getY', 'getZ', 'getW'];
+const vertexPosition = new Vector3();
+const vertexNormal = new Vector3();
+const edge = new Vector3();
+const skinnedNormal = new Vector4();
+const normalMatrix = new Matrix3();
+// Keeps a black attenuation channel finite; it still absorbs everything
+// within a tiny fraction of its attenuation distance.
+const minAttenuationColor = 1e-6;
 
-function copyFloatAttribute(attribute, itemSize, count) {
-    const values = new Float32Array(count * itemSize);
-    if (attribute && attribute.count === count) {
-        for (let vertexIndex = 0; vertexIndex < count; vertexIndex++) {
-            for (let componentIndex = 0; componentIndex < itemSize; componentIndex++) {
-                values[vertexIndex * itemSize + componentIndex] =
-                    attribute[geometryAttributeAccessors[componentIndex]](vertexIndex);
-            }
-        }
-    }
-
-    return new Float32BufferAttribute(values, itemSize);
+function getTriangleCount(geometry) {
+    return (geometry.index ?? geometry.getAttribute('position')).count / 3;
 }
 
-function normalizeGeometryForEncoding(geometry) {
-    const position = geometry.getAttribute('position');
-    if (!position || position.itemSize < 3) {
-        throw new Error('[PathTracing] Mesh geometry requires a vec3 position attribute.');
-    }
-
-    if (!geometry.getAttribute('normal')) {
-        geometry.computeVertexNormals();
-    }
-
-    const vertexCount = position.count;
-    geometry.setAttribute('position', copyFloatAttribute(geometry.getAttribute('position'), 3, vertexCount));
-    geometry.setAttribute('normal', copyFloatAttribute(geometry.getAttribute('normal'), 3, vertexCount));
-    geometry.setAttribute('uv', copyFloatAttribute(geometry.getAttribute('uv'), 2, vertexCount));
-
-    Object.keys(geometry.attributes).forEach((attributeName) => {
-        if (!['position', 'normal', 'uv'].includes(attributeName)) {
-            geometry.deleteAttribute(attributeName);
-        }
-    });
-    geometry.morphAttributes = {};
-
-    return geometry;
-}
-
-class Triangle {
-    constructor(v1, v2, v3, n1, n2, n3, uv1, uv2, uv3, materialIndex = 0) {
-        this.p1 = v1;
-        this.p2 = v2;
-        this.p3 = v3;
-        this.n1 = n1;
-        this.n2 = n2;
-        this.n3 = n3;
-        this.uv1 = uv1;
-        this.uv2 = uv2;
-        this.uv3 = uv3;
-        this.materialIndex = materialIndex;
-
-        this.aa = new Vector3(Infinity, Infinity, Infinity);
-        this.bb = new Vector3(-Infinity, -Infinity, -Infinity);
-        this.center = new Vector3(0, 0, 0);
-
-        this.computeBoundingBox();
-        this.computeCenteic();
-    }
-
-    computeBoundingBox() {
-        this.aa.x = Math.min(this.p1.x, Math.min(this.p2.x, this.p3.x));
-        this.aa.y = Math.min(this.p1.y, Math.min(this.p2.y, this.p3.y));
-        this.aa.z = Math.min(this.p1.z, Math.min(this.p2.z, this.p3.z));
-        this.bb.x = Math.max(this.p1.x, Math.max(this.p2.x, this.p3.x));
-        this.bb.y = Math.max(this.p1.y, Math.max(this.p2.y, this.p3.y));
-        this.bb.z = Math.max(this.p1.z, Math.max(this.p2.z, this.p3.z));
-    }
-
-    computeCenteic() {
-        this.center = new Vector3(
-            (this.p1.x + this.p2.x + this.p3.x) / 3,
-            (this.p1.y + this.p2.y + this.p3.y) / 3,
-            (this.p1.z + this.p2.z + this.p3.z) / 3
-        );
+// three.js and KHR_materials_volume define attenuationColor as the color white
+// light turns after attenuationDistance in the medium. Beer-Lambert then gives
+// the absorption coefficient -ln(color) / distance per channel. Materials
+// without a volume, or with the default infinite distance, absorb nothing.
+function writeAbsorptionCoefficient(material, target, offset) {
+    const color = material?.attenuationColor;
+    const distance = material?.attenuationDistance ?? Infinity;
+    for (const [channel, component] of ['r', 'g', 'b'].entries()) {
+        target[offset + channel] = color
+            ? -Math.log(Math.max(color[component], minAttenuationColor)) / distance
+            : 0.0;
     }
 }
 
-class BVHNode {
-    constructor() {
-        this.aa = new Vector3(Infinity, Infinity, Infinity);
-        this.bb = new Vector3(-Infinity, -Infinity, -Infinity);
-        this.id = null;
-        this.isLeaf = null;
-        this.left = null;
-        this.right = null;
-        this.index = null;
-        this.size = null;
+function getTextureHeight(texelCount) {
+    return Math.max(1, Math.ceil(texelCount / fixedDataTextureWidth));
+}
+
+function createDataTexture(data, textureHeight, format, type, unpackAlignment) {
+    const texture = new DataTexture(
+        data,
+        fixedDataTextureWidth,
+        textureHeight,
+        format,
+        type,
+        Texture.DEFAULT_MAPPING,
+        ClampToEdgeWrapping,
+        ClampToEdgeWrapping,
+        NearestFilter,
+        NearestFilter,
+        1
+    );
+    texture.colorSpace = NoColorSpace;
+    texture.flipY = false;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+    texture.unpackAlignment = unpackAlignment;
+    return texture;
+}
+
+// Writes world-space positions and normals for every vertex of the mesh.
+// getVertexPosition applies morph targets and skinning from the bones'
+// matrixWorld and returns local space, so call it after updateMatrixWorld.
+// Skinned normals go through the same bone matrices with w = 0, as in the
+// three.js skinnormal_vertex chunk. Morph normals are not applied.
+function writeWorldVertices(mesh, positions, normals) {
+    const { geometry, matrixWorld } = mesh;
+    const normal = geometry.getAttribute('normal');
+    const vertexCount = geometry.getAttribute('position').count;
+    normalMatrix.getNormalMatrix(matrixWorld);
+
+    for (let vertex = 0; vertex < vertexCount; vertex++) {
+        mesh.getVertexPosition(vertex, vertexPosition).applyMatrix4(matrixWorld).toArray(positions, 3 * vertex);
+        if (normal) {
+            vertexNormal.fromBufferAttribute(normal, vertex);
+            if (mesh.isSkinnedMesh) {
+                skinnedNormal.set(vertexNormal.x, vertexNormal.y, vertexNormal.z, 0);
+                mesh.applyBoneTransform(vertex, skinnedNormal);
+                vertexNormal.set(skinnedNormal.x, skinnedNormal.y, skinnedNormal.z);
+            }
+            vertexNormal.applyNormalMatrix(normalMatrix).toArray(normals, 3 * vertex);
+        }
     }
 }
 
-class BVHBuilder {
-
-    constructor(geometry, materialIndices = [], leafSize = bvhLeafSize) {
-        this.position = geometry.attributes.position.array;
-        if (!geometry.attributes.normal) {
-            geometry.computeVertexNormals();
-        }
-        this.normal = geometry.attributes.normal.array;
-        if (geometry.attributes.uv) {
-            this.uv = geometry.attributes.uv.array;
-        }
-        else {
-            this.uv = [];
-        }
-        this.totalTriangles = this.position.length / 9;
-        this.materialIndices = materialIndices;
-        this.triangles = [];
-        this.nodes = [];
-        this.leafSize = leafSize;
-
-        this.prepare();
-
-    }
-
-    prepare() {
-        this.nodes = [];
-        this.triangles = [];
-        for (let i = 0; i < this.totalTriangles; ++i) {
-            this.triangles.push(new Triangle(
-                new Vector3(
-                    this.position[9 * i],
-                    this.position[9 * i + 1],
-                    this.position[9 * i + 2]
-                ),
-                new Vector3(
-                    this.position[9 * i + 3],
-                    this.position[9 * i + 4],
-                    this.position[9 * i + 5]
-                ),
-                new Vector3(
-                    this.position[9 * i + 6],
-                    this.position[9 * i + 7],
-                    this.position[9 * i + 8]
-                ),
-                new Vector3(
-                    this.normal[9 * i],
-                    this.normal[9 * i + 1],
-                    this.normal[9 * i + 2]
-                ),
-                new Vector3(
-                    this.normal[9 * i + 3],
-                    this.normal[9 * i + 4],
-                    this.normal[9 * i + 5]
-                ),
-                new Vector3(
-                    this.normal[9 * i + 6],
-                    this.normal[9 * i + 7],
-                    this.normal[9 * i + 8]
-                ),
-                new Vector2(
-                    this.uv[6 * i],
-                    this.uv[6 * i + 1],
-                ),
-                new Vector2(
-                    this.uv[6 * i + 2],
-                    this.uv[6 * i + 3],
-                ),
-                new Vector2(
-                    this.uv[6 * i + 4],
-                    this.uv[6 * i + 5],
-                ),
-                this.materialIndices[i] ?? 0
-            ));
+// Gives every corner of the triangles the face normal, for meshes without
+// a normal attribute.
+function writeFaceNormals(positions, normals, firstTriangle, triangleCount) {
+    for (let triangle = firstTriangle; triangle < firstTriangle + triangleCount; triangle++) {
+        const offset = 9 * triangle;
+        vertexPosition.fromArray(positions, offset);
+        vertexNormal.fromArray(positions, offset + 3).sub(vertexPosition);
+        edge.fromArray(positions, offset + 6).sub(vertexPosition);
+        vertexNormal.cross(edge).normalize();
+        for (let corner = 0; corner < 3; corner++) {
+            vertexNormal.toArray(normals, offset + 3 * corner);
         }
     }
+}
 
-    setGeometry(geometry) {
-        this.position = geometry.attributes.position.array;
-        if (!geometry.attributes.normal) {
-            geometry.computeVertexNormals();
-        }
-        this.normal = geometry.attributes.normal.array;
-        if (geometry.attributes.uv) {
-            this.uv = geometry.attributes.uv.array;
-            this.hasUv = true;
-        }
-        else {
-            this.uv = [];
-            this.hasUv = false;
-        }
-        this.init();
+// Triangle slot k of the texture holds triangle primitiveIndices[k], so a
+// leaf's primitive offset is also its first triangle slot.
+function encodeTriangles({ positions, normals, uvs, materialIndices }, primitiveIndices) {
+    const triangleCount = primitiveIndices.length;
+    const textureHeight = getTextureHeight(texelsPerTriangle * triangleCount);
+    const data = new Float32Array(fixedDataTextureWidth * textureHeight * 4);
+    const stride = gpuSceneLayout.triangle.stride;
+
+    for (let slot = 0; slot < triangleCount; slot++) {
+        const triangle = primitiveIndices[slot];
+        const offset = stride * slot;
+        data.set(positions.subarray(9 * triangle, 9 * triangle + 9), offset);
+        data.set(normals.subarray(9 * triangle, 9 * triangle + 9), offset + 9);
+        data.set(uvs.subarray(6 * triangle, 6 * triangle + 6), offset + 18);
+        data[offset + 24] = materialIndices[triangle];
     }
 
-    rangeSort(arr, left, right, compareFn) {
-        let leftArr = arr.slice(0, left);
-        let rangeArr = arr.slice(left, right);
-        let rightArr = arr.slice(right, this.totalTriangles);
-        rangeArr.sort(compareFn);
-        return leftArr.concat(rangeArr).concat(rightArr);
-    }
+    return {
+        dataTexture: createDataTexture(data, textureHeight, RGBAFormat, FloatType, 8),
+        textureWidth: fixedDataTextureWidth,
+        textureHeight,
+    };
+}
 
-    sortTrianglesByLongestAxis(node, left, right) {
-        let lenX = node.bb.x - node.aa.x;
-        let lenY = node.bb.y - node.aa.y;
-        let lenZ = node.bb.z - node.aa.z;
-        if (lenX >= lenY && lenX >= lenZ) {
-            this.triangles = this.rangeSort(this.triangles, left, right + 1, (a, b) => { return a.center.x - b.center.x; });
-        }
+// The 32-byte nodes are uploaded unchanged as two RGBA32UI texels.
+function encodeBVH(bvh) {
+    const textureHeight = getTextureHeight(texelsPerBVHNode * bvh.nodeCount);
+    const data = new Uint32Array(fixedDataTextureWidth * textureHeight * 4);
+    data.set(bvh.uint32);
 
-        if (lenY >= lenX && lenY >= lenZ) {
-            this.triangles = this.rangeSort(this.triangles, left, right + 1, (a, b) => { return a.center.y - b.center.y; });
-        }
-
-        if (lenZ >= lenY && lenZ >= lenX) {
-            this.triangles = this.rangeSort(this.triangles, left, right + 1, (a, b) => { return a.center.z - b.center.z; });
-        }
-    }
-
-    createNode(left, right) {
-        let node = new BVHNode();
-        let triangles = this.triangles;
-        for (let i = left; i <= right; ++i) {
-            let minX = Math.min(triangles[i].p1.x, Math.min(triangles[i].p2.x, triangles[i].p3.x));
-            let minY = Math.min(triangles[i].p1.y, Math.min(triangles[i].p2.y, triangles[i].p3.y));
-            let minZ = Math.min(triangles[i].p1.z, Math.min(triangles[i].p2.z, triangles[i].p3.z));
-            node.aa.x = Math.min(node.aa.x, minX);
-            node.aa.y = Math.min(node.aa.y, minY);
-            node.aa.z = Math.min(node.aa.z, minZ);
-
-            let maxX = Math.max(triangles[i].p1.x, Math.max(triangles[i].p2.x, triangles[i].p3.x));
-            let maxY = Math.max(triangles[i].p1.y, Math.max(triangles[i].p2.y, triangles[i].p3.y));
-            let maxZ = Math.max(triangles[i].p1.z, Math.max(triangles[i].p2.z, triangles[i].p3.z));
-            node.bb.x = Math.max(node.bb.x, maxX);
-            node.bb.y = Math.max(node.bb.y, maxY);
-            node.bb.z = Math.max(node.bb.z, maxZ);
-        }
-        this.nodes.push(node);
-        node.id = this.nodes.length - 1;
-        node.isLeaf = false;
-        node.left = node.right = node.index = 0;
-        return node;
-    }
-
-    createSahNode(left, right) {
-        let Node = this.createNode(left, right);
-        let Split = this.calculateSah(left, right);
-        return { Split, Node };
-    }
-
-    calculateSah(left, right) {
-        let Cost = Infinity;
-        let Split = 0;
-        let Axis = 0;
-        for (let axis = 0; axis < 3; ++axis) {
-            this.sortTrianglesByAxis(axis, left, right);
-            let leftMin = [];
-            let leftMax = [];
-            let rightMin = [];
-            let rightMax = [];
-            for (let i = 0; i < right - left + 1; ++i) {
-                leftMin.push(new Vector3(Infinity, Infinity, Infinity));
-                rightMin.push(new Vector3(Infinity, Infinity, Infinity));
-                leftMax.push(new Vector3(-Infinity, -Infinity, -Infinity));
-                rightMax.push(new Vector3(-Infinity, -Infinity, -Infinity));
-            }
-            for (let i = left; i <= right; ++i) {
-                let t = this.triangles[i];
-                let bias = (i === left) ? 0 : 1;
-                leftMax[i - left].x = Math.max(leftMax[i - left - bias].x, Math.max(t.p1.x, Math.max(t.p2.x, t.p3.x)));
-                leftMax[i - left].y = Math.max(leftMax[i - left - bias].y, Math.max(t.p1.y, Math.max(t.p2.y, t.p3.y)));
-                leftMax[i - left].z = Math.max(leftMax[i - left - bias].z, Math.max(t.p1.z, Math.max(t.p2.z, t.p3.z)));
-                leftMin[i - left].x = Math.min(leftMin[i - left - bias].x, Math.min(t.p1.x, Math.min(t.p2.x, t.p3.x)));
-                leftMin[i - left].y = Math.min(leftMin[i - left - bias].y, Math.min(t.p1.y, Math.min(t.p2.y, t.p3.y)));
-                leftMin[i - left].z = Math.min(leftMin[i - left - bias].z, Math.min(t.p1.z, Math.min(t.p2.z, t.p3.z)));
-
-                t = this.triangles[left + right - i];
-                rightMax[right - i].x = Math.max(rightMax[right - i + bias].x, Math.max(t.p1.x, Math.max(t.p2.x, t.p3.x)));
-                rightMax[right - i].y = Math.max(rightMax[right - i + bias].y, Math.max(t.p1.y, Math.max(t.p2.y, t.p3.y)));
-                rightMax[right - i].z = Math.max(rightMax[right - i + bias].z, Math.max(t.p1.z, Math.max(t.p2.z, t.p3.z)));
-
-                rightMin[right - i].x = Math.min(rightMin[right - i + bias].x, Math.min(t.p1.x, Math.min(t.p2.x, t.p3.x)));
-                rightMin[right - i].y = Math.min(rightMin[right - i + bias].y, Math.min(t.p1.y, Math.min(t.p2.y, t.p3.y)));
-                rightMin[right - i].z = Math.min(rightMin[right - i + bias].z, Math.min(t.p1.z, Math.min(t.p2.z, t.p3.z)));
-
-            }
-
-            let cost = Infinity;
-            let split = left;
-            for (let i = left; i <= right - 1; ++i) {
-                let leftAA = leftMin[i - left];
-                let leftBB = leftMax[i - left];
-                let lenX = leftBB.x - leftAA.x;
-                let lenY = leftBB.y - leftAA.y;
-                let lenZ = leftBB.z - leftAA.z;
-                let leftS = (lenX * lenY) + (lenX * lenZ) + (lenY * lenZ);
-
-                let rightAA = rightMin[i - left];
-                let rightBB = rightMax[i - left];
-                lenX = rightBB.x - rightAA.x;
-                lenY = rightBB.y - rightAA.y;
-                lenZ = rightBB.z - rightAA.z;
-                let rightS = (lenX * lenY) + (lenX * lenZ) + (lenY * lenZ);
-                let S = leftS * (i - left + 1) + rightS * (right - i);
-
-                if (S < cost) {
-                    cost = S;
-                    split = i;
-                }
-            }
-            if (cost < Cost) {
-                Cost = cost;
-                Axis = axis;
-                Split = split;
-            }
-        }
-        this.sortTrianglesByAxis(Axis, left, right);
-        return Split;
-    }
-
-    buildRecursiveMedian(left, right) {
-        if (left > right) {
-            return;
-        }
-
-        let node = this.createNode(left, right);
-
-        if (right - left + 1 <= this.leafSize) {
-            node.isLeaf = true;
-            node.index = left;
-            node.size = right - left + 1;
-            return node.id;
-        }
-        this.sortTrianglesByLongestAxis(node, left, right);
-        let mid = Math.floor((left + right) / 2);
-        let l = this.buildRecursiveMedian(left, mid);
-        let r = this.buildRecursiveMedian(mid + 1, right);
-
-        node.left = l;
-        node.right = r;
-
-        return node.id;
-    }
-
-    buildRecursiveSAH(left, right) {
-
-        if (left > right) {
-            return;
-        }
-        let node = this.createNode(left, right);
-
-        node.isLeaf = false;
-        if (right - left + 1 <= this.leafSize) {
-            node.isLeaf = true;
-            node.index = left;
-            node.size = right - left + 1;
-            return node.id;
-        }
-
-        let Split = this.calculateSah(left, right);
-
-        node.left = this.buildRecursiveSAH(left, Split);
-        node.right = this.buildRecursiveSAH(Split + 1, right);
-
-        return node.id;
-    }
-
-    buildIterativeMedian() {
-        let $stacks = [];
-        function push(l, r, lastNode, flag) {
-            $stacks.push([
-                l,
-                r,
-                lastNode,
-                flag
-            ]);
-        };
-        function pop() {
-            return $stacks.pop();
-        }
-
-        push(0, this.totalTriangles - 1, null, null);
-        while ($stacks.length > 0) {
-            let stack = pop();
-            let left = stack[0];
-            let right = stack[1];
-            let lastNode = stack[2];
-            let flag = stack[3];
-
-            if (left > right) {
-                return;
-            }
-
-            let node = this.createNode(left, right);
-            if (lastNode) {
-                if (flag === "left") {
-                    lastNode.left = node.id;
-                }
-                else if (flag === "right") {
-                    lastNode.right = node.id;
-                }
-            }
-            if (right - left < this.leafSize) {
-                node.isLeaf = true;
-                node.index = left;
-                node.size = right - left + 1;
-                continue;
-            }
-
-            this.sortTrianglesByLongestAxis(node, left, right);
-            let mid = Math.floor((left + right) / 2);
-            if (mid < left || mid > right) {
-                continue;
-            }
-
-            push(left, mid, node, "left");
-            push(mid + 1, right, node, "right");
-        }
-
-    }
-
-    buildIterativeSAH() {
-        let $stacks = [];
-        function $call(l, r, split, node) {
-            $stacks.push({
-                ok: false,
-                left: l,
-                right: r,
-                split: split,
-                node: node
-            });
-        };
-
-        let { Split, Node } = this.createSahNode(0, this.totalTriangles - 1);
-        $call(0, this.totalTriangles - 1, Split, Node);
-
-        while ($stacks.length > 0) {
-
-            $stacks.forEach((stack, index) => {
-                if (stack.ok) {
-                    $stacks.splice(index, 1);
-                    return;
-                }
-
-                let { left, right, node } = stack;
-
-                if (left > right) {
-                    stack.ok = true;
-                    $stacks.splice(index, 1);
-                    return;
-                }
-
-                node.isLeaf = false;
-                if (right - left + 1 <= this.leafSize) {
-                    node.index = left;
-                    node.size = right - left + 1;
-                    node.isLeaf = true;
-                    stack.ok = true;
-                    $stacks.splice(index, 1);
-                    return;
-                }
-
-                let split = stack.split;
-
-                let obj = this.createSahNode(left, split);
-                node.left = obj.Node.id;
-                $call(left, split, obj.Split, obj.Node);
-
-                obj = this.createSahNode(split + 1, right);
-                node.right = obj.Node.id;
-                $call(split + 1, right, obj.Split, obj.Node);
-
-                stack.node = node;
-                stack.ok = true;
-                $stacks.splice(index, 1);
-            });
-
-        }
-
-    }
-
-    build(type = 0, method = 0) {
-        if (type === 0) {
-            if (method === 1) {
-                this.buildRecursiveSAH(0, this.totalTriangles - 1);
-                return;
-            }
-
-            this.buildRecursiveMedian(0, this.totalTriangles - 1);
-            return;
-        }
-
-        if (method === 1) {
-            this.buildIterativeSAH();
-            return;
-        }
-
-        this.buildIterativeMedian();
-    }
+    return {
+        dataTexture: createDataTexture(data, textureHeight, RGBAIntegerFormat, UnsignedIntType, 4),
+        textureWidth: fixedDataTextureWidth,
+        textureHeight,
+    };
 }
 
 class SceneGenerator {
@@ -508,8 +162,6 @@ class SceneGenerator {
     constructor(model, options = {}) {
         this.model = model;
         this.meshFilter = options.meshFilter || null;
-        this.geometries = [];
-        this.geometryMaterialIndices = [];
         this.materials = [];
         this.materialIndexMap = new Map();
         this.textureSlotMaps = {
@@ -554,147 +206,89 @@ class SceneGenerator {
         return this.materialIndexMap.get(key);
     }
 
-    generate() {
-        this.model.updateWorldMatrix(true, true);
-
+    collectMeshes() {
+        const meshes = [];
         this.model.traverse(child => {
             if (child.isMesh && (!this.meshFilter || this.meshFilter(child))) {
-                const geometry = child.geometry.clone().toNonIndexed();
-                geometry.applyMatrix4(child.matrixWorld);
-                normalizeGeometryForEncoding(geometry);
-
-                const triangleCount = geometry.attributes.position.array.length / 9;
-                const materialIndices = new Array(triangleCount).fill(0);
-                const materials = Array.isArray(child.material) ? child.material : [child.material];
-
-                if (materials.length > 1 && geometry.groups.length > 0) {
-                    geometry.groups.forEach(group => {
-                        const triangleStart = Math.floor(group.start / 3);
-                        const triangleCountInGroup = Math.floor(group.count / 3);
-                        const materialIndex = this.registerMaterial(materials[group.materialIndex] || materials[0] || null);
-                        for (let i = 0; i < triangleCountInGroup; i++) {
-                            materialIndices[triangleStart + i] = materialIndex;
-                        }
-                    });
-                } else {
-                    const materialIndex = this.registerMaterial(materials[0] || null);
-                    materialIndices.fill(materialIndex);
-                }
-
-                this.geometries.push(geometry);
-                this.geometryMaterialIndices.push(materialIndices);
+                meshes.push(child);
             }
         });
 
-        if (this.geometries.length === 0) {
+        if (meshes.length === 0) {
             throw new Error('[PathTracing] No meshes matched the SceneGenerator filter.');
         }
+        return meshes;
+    }
 
-        const mergedMaterialIndices = this.geometryMaterialIndices.flat();
-        let mergedGeometry = null;
-        let builder;
-        try {
-            mergedGeometry = mergeGeometries(this.geometries, false);
-            if (!mergedGeometry) {
-                throw new Error('[PathTracing] Failed to merge normalized scene geometry.');
+    writeMaterialIndices(mesh, materialIndices, firstTriangle, triangleCount) {
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const { groups } = mesh.geometry;
+        const end = firstTriangle + triangleCount;
+
+        if (materials.length > 1 && groups.length > 0) {
+            groups.forEach(group => {
+                const groupStart = firstTriangle + Math.floor(group.start / 3);
+                const groupEnd = Math.min(end, groupStart + Math.floor(group.count / 3));
+                const materialIndex = this.registerMaterial(materials[group.materialIndex] || materials[0] || null);
+                materialIndices.fill(materialIndex, groupStart, groupEnd);
+            });
+        } else {
+            materialIndices.fill(this.registerMaterial(materials[0] || null), firstTriangle, end);
+        }
+    }
+
+    // Returns world-space triangles as flat arrays: nine position and nine
+    // normal floats, six UV floats, and one material index per triangle.
+    collectTriangles(meshes) {
+        let triangleCount = 0;
+        meshes.forEach(mesh => {
+            triangleCount += getTriangleCount(mesh.geometry);
+        });
+
+        const positions = new Float32Array(9 * triangleCount);
+        const normals = new Float32Array(9 * triangleCount);
+        const uvs = new Float32Array(6 * triangleCount);
+        const materialIndices = new Uint32Array(triangleCount);
+
+        let firstTriangle = 0;
+        meshes.forEach(mesh => {
+            const { geometry } = mesh;
+            const { index } = geometry;
+            const uv = geometry.getAttribute('uv');
+            const vertexCount = geometry.getAttribute('position').count;
+            const vertexPositions = new Float32Array(3 * vertexCount);
+            const vertexNormals = new Float32Array(3 * vertexCount);
+            const meshTriangleCount = getTriangleCount(geometry);
+
+            writeWorldVertices(mesh, vertexPositions, vertexNormals);
+            this.writeMaterialIndices(mesh, materialIndices, firstTriangle, meshTriangleCount);
+
+            for (let corner = 0; corner < 3 * meshTriangleCount; corner++) {
+                const vertex = index ? index.getX(corner) : corner;
+                const target = 3 * firstTriangle + corner;
+                for (let axis = 0; axis < 3; axis++) {
+                    positions[3 * target + axis] = vertexPositions[3 * vertex + axis];
+                    normals[3 * target + axis] = vertexNormals[3 * vertex + axis];
+                }
+                if (uv) {
+                    uvs[2 * target] = uv.getX(vertex);
+                    uvs[2 * target + 1] = uv.getY(vertex);
+                }
             }
-            builder = new BVHBuilder(mergedGeometry, mergedMaterialIndices);
-        } finally {
-            this.geometries.forEach((geometry) => geometry.dispose());
-            this.geometries.length = 0;
-            mergedGeometry?.dispose();
-        }
 
-        builder.build();
+            if (!geometry.getAttribute('normal')) {
+                writeFaceNormals(positions, normals, firstTriangle, meshTriangleCount);
+            }
+            firstTriangle += meshTriangleCount;
+        });
 
-        const { totalTriangles, triangles, nodes } = builder;
+        return { positions, normals, uvs, materialIndices };
+    }
 
-        const texelWidth = fixedDataTextureWidth;
-        let totalTexels = texelsPerTriangle * totalTriangles;
-        let texelHeight = Math.max(1, Math.ceil(totalTexels / texelWidth));
-        const th = texelHeight;
-
-        let triangleArray = new Float32Array(texelWidth * texelHeight * 4);
-        let stride = gpuSceneLayout.triangle.stride;
-
-        for (let i = 0; i < totalTriangles; ++i) {
-            let triangle = triangles[i];
-            let vp1 = triangle.p1;
-            let vp2 = triangle.p2;
-            let vp3 = triangle.p3;
-            let vn1 = triangle.n1;
-            let vn2 = triangle.n2;
-            let vn3 = triangle.n3;
-            let vt1 = triangle.uv1;
-            let vt2 = triangle.uv2;
-            let vt3 = triangle.uv3;
-
-            triangleArray[stride * i + 0] = vp1.x;
-            triangleArray[stride * i + 1] = vp1.y;
-            triangleArray[stride * i + 2] = vp1.z;
-            triangleArray[stride * i + 3] = vp2.x;
-
-            triangleArray[stride * i + 4] = vp2.y;
-            triangleArray[stride * i + 5] = vp2.z;
-            triangleArray[stride * i + 6] = vp3.x;
-            triangleArray[stride * i + 7] = vp3.y;
-
-            triangleArray[stride * i + 8] = vp3.z;
-            triangleArray[stride * i + 9] = vn1.x;
-            triangleArray[stride * i + 10] = vn1.y;
-            triangleArray[stride * i + 11] = vn1.z;
-
-            triangleArray[stride * i + 12] = vn2.x;
-            triangleArray[stride * i + 13] = vn2.y;
-            triangleArray[stride * i + 14] = vn2.z;
-            triangleArray[stride * i + 15] = vn3.x;
-
-            triangleArray[stride * i + 16] = vn3.y;
-            triangleArray[stride * i + 17] = vn3.z;
-            triangleArray[stride * i + 18] = vt1.x;
-            triangleArray[stride * i + 19] = vt1.y;
-
-            triangleArray[stride * i + 20] = vt2.x;
-            triangleArray[stride * i + 21] = vt2.y;
-            triangleArray[stride * i + 22] = vt3.x;
-            triangleArray[stride * i + 23] = vt3.y;
-
-            triangleArray[stride * i + 24] = triangle.materialIndex;
-            triangleArray[stride * i + 25] = 0;
-            triangleArray[stride * i + 26] = 0;
-            triangleArray[stride * i + 27] = 0;
-
-            triangleArray[stride * i + 28] = 0;
-            triangleArray[stride * i + 29] = 0;
-            triangleArray[stride * i + 30] = 0;
-            triangleArray[stride * i + 31] = 0;
-
-        }
-
-        const triangleDataTexture = new DataTexture(
-            triangleArray,
-            texelWidth,
-            texelHeight,
-            RGBAFormat,
-            FloatType,
-            Texture.DEFAULT_MAPPING,
-            ClampToEdgeWrapping,
-            ClampToEdgeWrapping,
-            NearestFilter,
-            NearestFilter,
-            1
-        );
-        triangleDataTexture.colorSpace = NoColorSpace;
-        triangleDataTexture.flipY = false;
-        triangleDataTexture.generateMipmaps = false;
-        triangleDataTexture.needsUpdate = true;
-        triangleDataTexture.unpackAlignment = 8;
-
-        totalTexels = texelsPerMaterial * this.materials.length;
-        texelHeight = Math.max(1, Math.ceil(totalTexels / texelWidth));
-        const mh = texelHeight;
-        const materialArray = new Float32Array(texelWidth * texelHeight * 4);
-        stride = gpuSceneLayout.material.stride;
+    encodeMaterials() {
+        const textureHeight = getTextureHeight(texelsPerMaterial * this.materials.length);
+        const materialArray = new Float32Array(fixedDataTextureWidth * textureHeight * 4);
+        const stride = gpuSceneLayout.material.stride;
 
         for (let i = 0; i < this.materials.length; ++i) {
             const material = this.materials[i];
@@ -731,101 +325,50 @@ class SceneGenerator {
             materialArray[stride * i + 14] = material?.normalScale?.y ?? 1.0;
             materialArray[stride * i + 15] = alphaMode;
             materialArray[stride * i + 16] = material?.side === DoubleSide ? 1.0 : 0.0;
-            materialArray[stride * i + 17] = 0.0;
-            materialArray[stride * i + 18] = 0.0;
-            materialArray[stride * i + 19] = 0.0;
+            materialArray[stride * i + 17] = material?.transmission ?? 0.0;
+            materialArray[stride * i + 18] = material?.ior ?? 1.5;
+            materialArray[stride * i + 19] = material?.thickness ?? 0.0;
+
+            writeAbsorptionCoefficient(material, materialArray, stride * i + 20);
         }
-
-        const materialDataTexture = new DataTexture(
-            materialArray,
-            texelWidth,
-            texelHeight,
-            RGBAFormat,
-            FloatType,
-            Texture.DEFAULT_MAPPING,
-            ClampToEdgeWrapping,
-            ClampToEdgeWrapping,
-            NearestFilter,
-            NearestFilter,
-            1
-        );
-        materialDataTexture.colorSpace = NoColorSpace;
-        materialDataTexture.flipY = false;
-        materialDataTexture.generateMipmaps = false;
-        materialDataTexture.needsUpdate = true;
-        materialDataTexture.unpackAlignment = 8;
-
-        const totalNodes = nodes.length;
-        totalTexels = texelsPerBVHNode * totalNodes;
-        texelHeight = Math.max(1, Math.ceil(totalTexels / texelWidth));
-        const bh = texelHeight;
-
-        stride = gpuSceneLayout.bvhNode.stride;
-        const nodesArray = new Float32Array(texelWidth * texelHeight * 4);
-
-        for (let i = 0; i < totalNodes; ++i) {
-            let node = nodes[i];
-            nodesArray[i * stride] = node.aa.x;
-            nodesArray[i * stride + 1] = node.aa.y;
-            nodesArray[i * stride + 2] = node.aa.z;
-            nodesArray[i * stride + 3] = node.bb.x;
-
-            nodesArray[i * stride + 4] = node.bb.y;
-            nodesArray[i * stride + 5] = node.bb.z;
-            nodesArray[i * stride + 6] = node.id;
-            nodesArray[i * stride + 7] = nodes[i].isLeaf ? 1 : 0;
-
-            nodesArray[i * stride + 8] = node.left;
-            nodesArray[i * stride + 9] = node.right;
-            nodesArray[i * stride + 10] = node.index;
-            nodesArray[i * stride + 11] = node.size;
-
-            nodesArray[i * stride + 12] = 0;
-            nodesArray[i * stride + 13] = 0;
-            nodesArray[i * stride + 14] = 0;
-            nodesArray[i * stride + 15] = 0;
-
-        }
-
-        const bvhDataTexture = new DataTexture(
-            nodesArray,
-            texelWidth,
-            texelHeight,
-            RGBAFormat,
-            FloatType,
-            Texture.DEFAULT_MAPPING,
-            ClampToEdgeWrapping,
-            ClampToEdgeWrapping,
-            NearestFilter,
-            NearestFilter,
-            1
-        );
-        bvhDataTexture.colorSpace = NoColorSpace;
-        bvhDataTexture.flipY = false;
-        bvhDataTexture.generateMipmaps = false;
-        bvhDataTexture.needsUpdate = true;
-        bvhDataTexture.unpackAlignment = 4;
 
         return {
-            triangle: {
-                dataTexture: triangleDataTexture,
-                textureWidth: fixedDataTextureWidth,
-                textureHeight: th
-            },
-            bvh: {
-                dataTexture: bvhDataTexture,
-                textureWidth: fixedDataTextureWidth,
-                textureHeight: bh
-            },
-            material: {
-                dataTexture: materialDataTexture,
-                textureWidth: fixedDataTextureWidth,
-                textureHeight: mh,
-                count: this.materials.length,
-                textures: this.textureSlots,
-            }
+            dataTexture: createDataTexture(materialArray, textureHeight, RGBAFormat, FloatType, 8),
+            textureWidth: fixedDataTextureWidth,
+            textureHeight,
+            count: this.materials.length,
+            textures: this.textureSlots,
+        };
+    }
 
-        }
+    generate() {
+        this.model.updateWorldMatrix(true, true);
+
+        const startTime = performance.now();
+        const meshes = this.collectMeshes();
+        const triangles = this.collectTriangles(meshes);
+        const collectTime = performance.now();
+        const bvh = buildBVH(computeTriangleBounds(triangles.positions), { leafThreshold: bvhLeafSize });
+        const buildTime = performance.now();
+        const triangle = encodeTriangles(triangles, bvh.primitiveIndices);
+        const encodedBVH = encodeBVH(bvh);
+        const material = this.encodeMaterials();
+        const encodeTime = performance.now();
+
+        return {
+            triangle,
+            bvh: encodedBVH,
+            material,
+            stats: {
+                meshCount: meshes.length,
+                triangleCount: bvh.primitiveCount,
+                materialCount: material.count,
+                collectMs: collectTime - startTime,
+                bvhBuildMs: buildTime - collectTime,
+                encodeMs: encodeTime - buildTime,
+                ...getBVHStats(bvh),
+            },
+        };
     }
 
 }
